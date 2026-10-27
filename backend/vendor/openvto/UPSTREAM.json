@@ -1,0 +1,10 @@
+﻿{
+    "commit":  "10140178cdb198ff17ad7b226c432bd63d732fc2",
+    "repository":  "https://github.com/Prompt-Haus/OpenVTO",
+    "source":  "packages/sdk",
+    "license":  "MIT",
+    "modifications":  [
+
+                      ],
+    "imported":  "2026-10-26"
+}

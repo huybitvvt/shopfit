@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "ShopFit",
+    "slug": "shopfit",
+    "scheme": "shopfit",
+    "version": "0.1.0",
+    "orientation": "default",
+    "icon": "./assets/shopfit-icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "vn.shopfit.studio"
+    },
+    "android": {
+      "package": "vn.shopfit.studio",
+      "adaptiveIcon": {
+        "backgroundColor": "#344E40",
+        "foregroundImage": "./assets/shopfit-icon.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/shopfit-icon.png",
+      "bundler": "metro",
+      "name": "ShopFit Studio"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-image",
+      "expo-secure-store",
+      "expo-sharing",
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "ShopFit cần chọn ảnh để bạn thử trang phục.",
+          "cameraPermission": "ShopFit cần camera để chụp ảnh thử trang phục.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-build-properties"
+    ]
+  }
+}

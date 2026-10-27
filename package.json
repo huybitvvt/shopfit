@@ -1,0 +1,15 @@
+{
+  "name": "shopfit",
+  "private": true,
+  "version": "0.1.0",
+  "description": "React Native fashion shop with OpenVTO and Gemini virtual try-on",
+  "scripts": {
+    "lint": "npm --prefix mobile run lint",
+    "start": "npm --prefix mobile start",
+    "web": "npm --prefix mobile run web",
+    "api": "node scripts/api.mjs",
+    "typecheck": "npm --prefix mobile run typecheck",
+    "test:api": "node scripts/api.mjs --test",
+    "test:e2e": "npm --prefix mobile run test:e2e"
+  }
+}

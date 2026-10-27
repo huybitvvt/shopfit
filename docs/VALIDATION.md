@@ -6,7 +6,7 @@
 | --- | --- |
 | `npm.cmd run typecheck` | Qua, TypeScript strict |
 | `npm.cmd run lint` | Qua, không lỗi/cảnh báo |
-| `npm.cmd run test:api` | 40 kiểm thử qua |
+| `npm.cmd run test:api` | 44 kiểm thử qua |
 | `npm.cmd run test:e2e` | 12 kiểm thử qua trong một lượt chạy, Edge/Chromium headless |
 | `npm.cmd --prefix mobile run export:android` | Xuất bundle Hermes Android thành công |
 | `npx.cmd expo install --check` trong `mobile` | Dependency native khớp Expo SDK 57 |
@@ -42,12 +42,24 @@
 - Pipeline **OpenVTO thật** nhận cả hai ảnh và gọi Google provider đúng model; chỉ phần trả lời mạng Google được thay thế trong test.
 - Kiểm tra live riêng: Google chấp nhận khóa, trả metadata model `gemini-3.1-flash-image`; POST một ảnh avatar mẫu OpenVTO và chọn áo thun đen qua API của app. Tác vụ chuyển `processing → completed`, tải được ảnh kết quả và đọc lại bản ghi trong lịch sử. Chỉ yêu cầu một lượt tạo ảnh trả phí.
 - Khóa chỉ được lưu trong `backend/.env`, đã xác nhận file bị Git bỏ qua và không có bản sao khóa trong các file có thể đưa vào Git.
+- Điều chỉnh kiểm tra ảnh nhỏ: ảnh 474×633 vẫn được nhận khi vision xác nhận đủ rõ/toàn thân, kích thước chỉ hiện lưu ý. Kiểm thử ảnh mờ ở cả kích thước nhỏ/lớn vẫn bị từ chối; báo cáo cache từ quy tắc cũ được xét lại mà không gọi vision lại hoặc gia hạn cache. Đã kiểm tra riêng ảnh `OIP.jpg` 474×633 qua API thật: được chấp nhận, chưa chạy tạo ảnh thử đồ.
 
 Kiểm thử bốn góc live gồm hai lượt có chủ đích, tổng 8 lần tạo ảnh: lượt đầu chạy đủ nhưng kiểm tra trực quan phát hiện hai góc bên quay lại hoodie cũ. Đã sửa để góc bên chỉ tham chiếu người từ ảnh đã thử, bổ sung vision kiểm tra sự nhất quán và chạy lại một bộ đầy đủ. Bộ sau giữ áo thun ở cả bốn góc, tất cả qua vision. Bản thử lỗi đã xóa khỏi lịch sử demo, không sửa ảnh đầu ra để giả kết quả. Dữ liệu/avatar đều là mẫu tổng hợp, không có số đo người thật đối chứng.
 
 Trong lần hoàn thiện sản phẩm, thêm hai lượt live có chủ đích (8 lần tạo ảnh): bộ đầu phát hiện mặt trước cắt chân và giày thay đổi giữa góc dù bộ lọc cũ thông qua. Đã đổi sang prompt riêng giữ toàn thân/giày, kiểm tra cả mặt trước trước khi tạo góc phụ và siết kiểm tra giày. Bộ sau hoàn tất 58,5 giây, giữ áo thun/giày đen/toàn thân qua kiểm tra trực quan. Bộ không đạt đã xóa khỏi lịch sử demo. Không tự retry vô hạn, không sử dụng ảnh AI làm đối chứng mặc thật.
 
 Ảnh chụp trong `artifacts/screenshots/` (không đưa vào Git). Các tài khoản/đơn UI test được tạo trong database phát triển; các đơn tạo trong lượt kiểm tra đã được hủy để hoàn lại tồn kho.
+
+## Tích hợp AdMob — 27/10/2026
+
+- `npm.cmd run typecheck` và `npm.cmd run lint`: qua, không lỗi/cảnh báo lint.
+- `npx.cmd expo install --check` trong `mobile`: dependency phù hợp Expo SDK 57.
+- `npx.cmd expo config --type introspect --json`: xác nhận Android manifest sinh ra có App ID thử nghiệm Google và `DELAY_APP_MEASUREMENT_INIT=true`, không sửa thủ công native project.
+- `npm.cmd --prefix mobile run export:android`: xuất thành công bundle Hermes, gồm module quảng cáo Android.
+- `npm.cmd run test:e2e`: cả 12 kiểm thử qua sau khi thêm AdMob và các sửa đổi ảnh nhỏ đang có; catalog web trên màn 375 px không có lỗi JavaScript/tràn ngang.
+- Không gọi Gemini thật, không build/cài APK, không quay video trong lượt tích hợp này. Chưa xác nhận banner tải được từ Google trên Android, xử lý lỗi quảng cáo/đổi hướng màn hình thực tế hoặc bỏ qua SDK trên Expo Go thật.
+- Banner chỉ dùng mã test, chưa có cấu hình quảng cáo thật/luồng đồng ý cho phát hành. Kịch bản video và mẫu nộp bài ở [ADMOB.md](ADMOB.md); chưa coi bài nộp hoàn tất chỉ từ kết quả bundle/web.
+- Kiểm tra lại trước khi chuyển máy và đẩy Git: lint và TypeScript qua; 44 kiểm thử API và 12 kiểm thử UI qua. Rà soát 161 file có thể đưa vào Git không phát hiện mẫu khóa API/token/private key; xác nhận `.env` và `backend/data/` được bỏ qua. Đã bổ sung hướng dẫn clone và cài dependency từ lockfile trong README.
 
 ## Chưa kiểm chứng
 

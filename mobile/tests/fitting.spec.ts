@@ -73,7 +73,8 @@ test('checked photo and chosen size submit a four-view job without calling a pai
   const headers = await customer(page, request);
   expect((await request.patch('http://localhost:8000/api/body-profile', { headers, data: { height_cm: 175, weight_kg: 70, chest_cm: 94, fit_preference: 'regular' } })).status()).toBe(200);
   let submitted = false;
-  await page.route('**/api/photo-check', route => route.fulfill({ json: { accepted: true, messages: [] } }));
+  const warning = 'Ảnh 474 × 633 px hơi nhỏ; vẫn có thể thử đồ nếu đủ rõ.';
+  await page.route('**/api/photo-check', route => route.fulfill({ json: { accepted: true, messages: [], resolution_ok: false, warnings: [warning] } }));
   await page.route('**/api/tryons', route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: [] });
     const body = route.request().postData() || '';
@@ -87,6 +88,8 @@ test('checked photo and chosen size submit a four-view job without calling a pai
   await page.getByRole('button', { name: 'Chọn ảnh', exact: true }).click();
   await (await chooser).setFiles(path.resolve('../backend/assets/everyday-tee.jpg'));
   await expect(page.getByText('Ảnh đạt kiểm tra đầu vào', { exact: true })).toBeVisible();
+  await expect(page.getByText(warning, { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Tạo 4 ảnh thử đồ của tôi', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: 'Tạo 4 ảnh thử đồ của tôi', exact: true }).click();
   await expect(page.getByText('Simulated provider failure for UI test', { exact: true })).toBeVisible();
   expect(submitted).toBeTruthy();

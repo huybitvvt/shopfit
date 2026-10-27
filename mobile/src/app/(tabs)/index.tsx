@@ -3,6 +3,7 @@ import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import AdBanner from '../../components/ad-banner';
 import { Button, CartButton, Empty, ErrorMessage, ProductCard, Screen, SectionHeading, s } from '../../components/ui';
 import { useStore } from '../../store';
 import { theme as t } from '../../theme';
@@ -42,6 +43,7 @@ export default function Discover() {
     {loading && products.length === 0 ? <ActivityIndicator color={t.colors.green} style={{ padding: 40 }} /> : <View style={{ flexDirection: 'row', flexWrap: 'wrap', columnGap: 18 }}>{filtered.map(p => <ProductCard key={p.id} product={p} width={cardWidth} />)}</View>}
     {!loading && !error && filtered.length === 0 && <Empty icon="search-outline" title="Chưa tìm thấy mẫu phù hợp" description="Thử một từ khóa khác hoặc khám phá tất cả thiết kế của shop." action="Xem tất cả" onPress={() => { setCategory('Tất cả'); setQuery(''); }} />}
     <View style={{ backgroundColor: t.colors.greenLight, borderRadius: 15, padding: 24, marginTop: 8, flexDirection: wide ? 'row' : 'column', gap: 20, alignItems: wide ? 'center' : 'flex-start' }}><View style={{ flex: 1 }}><Text style={s.kicker}>YOUR PRIVATE FITTING ROOM</Text><Text style={[s.title, { fontSize: 30, lineHeight: 34, marginVertical: 7 }]}>Ướm thử trước khi yêu.</Text><Text style={s.muted}>Chọn ảnh của bạn, chọn thiết kế và để AI giúp bạn hình dung.</Text></View><Button variant="outline" icon="arrow-forward" onPress={() => router.push('/try-on')}>Khám phá phòng thử</Button></View>
+    <AdBanner />
     <View style={{ alignItems: 'center', paddingTop: 38, paddingBottom: 8, gap: 7 }}><Text style={{ fontFamily: t.fonts.serifItalic, fontSize: 26, color: t.colors.green }}>Made for your everyday.</Text><Text style={{ fontFamily: t.fonts.regular, fontSize: 9, letterSpacing: 2, color: t.colors.muted }}>SHOPFIT STUDIO · VIETNAM</Text></View>
   </Screen>;
 }

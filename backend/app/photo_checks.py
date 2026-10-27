@@ -14,7 +14,7 @@ class Inspection(BaseModel):
     front_facing: bool
     standing_straight: bool
     clear_lighting: bool
-    sharp: bool
+    sharp: bool = Field(description="Person and clothing are clear enough for try-on. False only for severe blur or pixelation that makes body/clothing details unreadable; mild softness or compression is acceptable.")
     body_unobstructed: bool
 
 
@@ -51,8 +51,12 @@ class PhotoAnalyzer:
                     model=self.settings.vision_model,
                     contents=[types.Part.from_bytes(data=photo, mime_type="image/jpeg"),
                               "Inspect this photo for a full-body clothing try-on. Count visible people; check head and feet "
-                              "are fully visible, front facing, standing upright, adequate lighting, sharp focus, "
-                              "and no significant body occlusion. Do not estimate body measurements or identify the person."],
+                              "are fully visible, front facing, standing upright, adequate lighting, "
+                              "and no significant body occlusion. Judge practical usability rather than studio-photo quality: "
+                              "set sharp=false only for severe blur or pixelation that makes the person or clothing unreadable. "
+                              "Do not reject a clear image solely for small pixel dimensions, mild softness or JPEG compression. "
+                              "A casual hand gesture, hat or headphones alone is not significant body occlusion. "
+                              "Do not estimate body measurements or identify the person."],
                     config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=Inspection, temperature=0),
                 )
                 result = Inspection.model_validate_json(response.text).model_dump()
@@ -112,26 +116,30 @@ class PhotoAnalyzer:
         with self.db.connect() as conn:
             cached = conn.execute("SELECT report FROM photo_checks WHERE user_id=? AND digest=? AND expires_at>?",
                                   (user_id, digest, int(time.time()))).fetchone()
-        if cached:
-            return json.loads(cached[0])
         with Image.open(io.BytesIO(photo)) as image:
-            resolution_ok = image.width >= 512 and image.height >= 768
-        inspection = self.inspect(photo)
+            width, height = image.size
+        resolution_ok = width >= 512 and height >= 768
+        # Reapply the current policy to cached observations, including reports made
+        # before low resolution became advisory. Do not repeat a paid inspection.
+        inspection = json.loads(cached[0])["checks"] if cached else self.inspect(photo)
         messages = []
-        rules = [(resolution_ok, "Dùng ảnh tối thiểu 512 × 768 px, chụp dọc toàn thân."),
-                 (inspection["person_count"] == 1, "Ảnh chỉ có một người."),
+        warnings = []
+        if not resolution_ok:
+            warnings.append(f"Ảnh {width} × {height} px hơi nhỏ; vẫn có thể thử đồ nếu đủ rõ. Ảnh gốc lớn hơn sẽ giúp giữ chi tiết tốt hơn.")
+        rules = [(inspection["person_count"] == 1, "Ảnh chỉ có một người."),
                  (inspection["full_body_visible"], "Giữ trọn đầu và bàn chân trong khung ảnh."),
                  (inspection["front_facing"], "Đứng nhìn thẳng vào máy ảnh."),
                  (inspection["standing_straight"], "Đứng thẳng, hai tay cách nhẹ khỏi thân."),
                  (inspection["clear_lighting"], "Chụp nơi đủ sáng, tránh ngược sáng."),
-                 (inspection["sharp"], "Giữ máy ổn định để ảnh rõ nét."),
+                 (inspection["sharp"], "Ảnh quá mờ, không nhìn rõ người và trang phục. Chọn ảnh rõ hơn hoặc chụp lại."),
                  (inspection["body_unobstructed"], "Bỏ túi xách và vật che thân người.")]
         for valid, message in rules:
             if not valid:
                 messages.append(message)
-        report = {"accepted": not messages, "messages": messages, "checks": inspection, "resolution_ok": resolution_ok}
-        with self.db.connect() as conn:
-            conn.execute("DELETE FROM photo_checks WHERE expires_at<?", (int(time.time()),))
-            conn.execute("INSERT OR REPLACE INTO photo_checks VALUES (?,?,?,?)",
-                         (user_id, digest, json.dumps(report), int(time.time()) + 900))
+        report = {"accepted": not messages, "messages": messages, "warnings": warnings, "checks": inspection, "resolution_ok": resolution_ok}
+        if not cached:
+            with self.db.connect() as conn:
+                conn.execute("DELETE FROM photo_checks WHERE expires_at<?", (int(time.time()),))
+                conn.execute("INSERT OR REPLACE INTO photo_checks VALUES (?,?,?,?)",
+                             (user_id, digest, json.dumps(report), int(time.time()) + 900))
         return report

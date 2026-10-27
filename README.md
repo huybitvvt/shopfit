@@ -19,6 +19,7 @@ Phạm vi hiện tại: chạy bản web phát triển tại **http://localhost:
 - Đối chiếu với ảnh mặc thật, chấm ba tiêu chí và ghi nhận cảm nhận chật/vừa/rộng. Ảnh đối chứng cũng lưu riêng theo tài khoản.
 - Khóa Gemini chỉ nằm ở backend. Ảnh người dùng không đặt trong thư mục public; liên kết ảnh được ký và hết hạn sau 1 giờ.
 - Chống gửi trùng lượt thử/đặt hàng/tạo lại khi mất phản hồi; hàng đợi SQLite, tiếp tục phần việc an toàn sau restart, giữ ảnh ứng viên để chỉ kiểm tra lại khi lỗi vision. Trần số lời gọi và ngân sách dự trù AI theo ngày UTC.
+- Tích hợp mã nguồn banner AdMob thử nghiệm ở cuối danh mục Android; web/Expo Go bỏ qua SDK. Chưa xác nhận quảng cáo trên thiết bị. Hướng dẫn chạy và kịch bản video nộp bài: [docs/ADMOB.md](docs/ADMOB.md).
 
 **Đã kiểm thử bộ bốn ảnh Gemini thực tế** qua OpenVTO: lần kiểm tra sau khi sửa tham chiếu hoàn tất trong 49,9 giây, giữ cùng áo thun ở bốn góc. Dùng avatar tổng hợp của OpenVTO và số đo minh họa, chưa chứng minh độ vừa khi mặc thật. Không tạo video hay mô hình 3D.
 
@@ -41,12 +42,21 @@ docs/                    Kiến trúc và nguồn tham khảo
 
 Yêu cầu: Node.js LTS, Python 3.10+.
 
-### 1. Cài thư viện
-
-Từ `E:\ckimobile`:
+Trên máy khác, lấy mã nguồn:
 
 ```powershell
-npm.cmd --prefix mobile install
+git clone https://github.com/huybitvvt/shopfit.git
+Set-Location shopfit
+```
+
+Nếu đã clone repo, chạy `git pull --ff-only` trong thư mục repo để cập nhật. Git không chứa các file `.env`, database và ảnh runtime; tạo lại cấu hình theo bước 2, sao lưu riêng `backend/data/` nếu cần chuyển dữ liệu cũ.
+
+### 1. Cài thư viện
+
+Từ thư mục gốc repo:
+
+```powershell
+npm.cmd --prefix mobile ci
 python -m venv backend/.venv
 Set-Location backend
 .\.venv\Scripts\python.exe -m pip install -r requirements-lock.txt
@@ -97,7 +107,7 @@ Terminal 2:
 npm.cmd start
 ```
 
-Quét QR bằng Expo Go tương thích **SDK 57**, hoặc nhấn `a` với Android emulator. Bản xem trước trình duyệt:
+Quét QR bằng Expo Go tương thích **SDK 57** để xem các chức năng shop (không có AdMob). Quảng cáo cần bản Android build có SDK native; xem [docs/ADMOB.md](docs/ADMOB.md). Bản xem trước trình duyệt:
 
 ```powershell
 npm.cmd run web

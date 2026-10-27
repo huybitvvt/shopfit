@@ -8,7 +8,13 @@ Trong app vào **Cá nhân → Kết nối shop**, nhập địa chỉ và bấm
 
 ## Build APK cục bộ
 
-Yêu cầu JDK và Android SDK đã cài, đặt `JAVA_HOME` và `ANDROID_HOME`. `expo prebuild` tự sinh native project; không sửa thủ công `android/`. Thư mục native được Git bỏ qua.
+Yêu cầu JDK và Android SDK đã cài, đặt `JAVA_HOME` và `ANDROID_HOME`. Dùng JDK 17 cho toolchain hiện tại: Android Studio JBR 25 trên máy này làm bước CMake lỗi `WARNING: A restricted method in java.lang.System has been called`; cùng bước đó đã chạy thành công khi đổi sang JDK 17. `expo prebuild` tự sinh native project; không sửa thủ công `android/`. Thư mục native được Git bỏ qua.
+
+Trên máy phát triển hiện tại đã có JDK 17 trong cache Gradle. Đặt biến cho terminal build, không cần đổi Java toàn hệ thống:
+
+```powershell
+$env:JAVA_HOME = 'E:\Android\Gradle\jdks\eclipse_adoptium-17-amd64-windows.2'
+```
 
 Script dùng một Gradle worker, Kotlin trong cùng tiến trình, Metro tối đa hai worker. Config plugin `with-build-limits` đặt Ninja pool tối đa hai tác vụ compile/một link để tránh mở hàng loạt trình biên dịch C++ trên máy 8 GB RAM. Giới hạn này ảnh hưởng lúc build, không thay đổi hiệu năng app đã cài.
 
@@ -38,6 +44,7 @@ Sau khi cài, mở app → Kết nối shop → nhập URL LAN → đăng nhập
 
 ## Kiểm tra thiết bị
 
+- AdMob: build lại sau khi thêm SDK, cuộn cuối màn Khám phá, kiểm tra banner Google có nhãn **Test Ad**; không xác nhận thành công chỉ dựa vào nhãn khu vực của ShopFit. Xem [ADMOB.md](ADMOB.md) để quay video bài tập. Web và Expo Go không có quảng cáo.
 - Catalog và ảnh sản phẩm; tìm kiếm, chọn màu/size, đặt và hủy đơn mẫu.
 - Hồ sơ cơ thể, bàn phím thập phân, đồ mặc vừa, bản đồ độ vừa, so số đo theo từng size.
 - Camera: từ chối quyền rồi cấp lại; thư viện ảnh, ảnh EXIF dọc, ảnh lớn, ảnh cắt đầu/chân và nhiều người.

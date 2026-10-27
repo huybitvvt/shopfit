@@ -1,14 +1,20 @@
+import hashlib
 import io
 import json
+import time
 
+import pytest
 from PIL import Image
 
 from app.config import Settings
 from app.db import Database
 from app.photo_checks import PhotoAnalyzer
+from app.tryon import normalize_image
 from test_api import client, create_tryon, login, photo_bytes, wait_job
 
 PROFILE = {"height_cm": 175, "weight_kg": 70, "chest_cm": 94, "waist_cm": 80, "hip_cm": 96}
+CLEAR_INSPECTION = {"person_count": 1, "full_body_visible": True, "front_facing": True,
+    "standing_straight": True, "clear_lighting": True, "sharp": True, "body_unobstructed": True}
 
 
 def test_profile_is_private_and_validated(client):
@@ -113,6 +119,57 @@ def test_photo_checks_reject_crop_and_cache_per_owner(tmp_path):
     assert len(calls) == 1
     analyzer.check("demo-admin", image.getvalue())
     assert len(calls) == 2
+
+
+def test_clear_small_photo_is_accepted_without_upscaling(tmp_path):
+    settings = Settings(data_dir=tmp_path, gemini_api_key="", seed_demo=True)
+    db = Database(settings)
+    db.initialize()
+    analyzer = PhotoAnalyzer(db, settings)
+    analyzer.inspect = lambda photo: CLEAR_INSPECTION.copy()
+    image = io.BytesIO()
+    Image.new("RGB", (474, 633)).save(image, "JPEG")
+    photo = normalize_image(image.getvalue())
+    with Image.open(io.BytesIO(photo)) as decoded:
+        assert decoded.size == (474, 633)
+    report = analyzer.check("demo-customer", photo)
+    assert report["accepted"] and report["messages"] == []
+    assert report["resolution_ok"] is False and "474 × 633" in report["warnings"][0]
+
+
+@pytest.mark.parametrize("dimensions", [(474, 633), (768, 1024)])
+def test_severe_blur_is_rejected_regardless_of_resolution(tmp_path, dimensions):
+    settings = Settings(data_dir=tmp_path, gemini_api_key="", seed_demo=True)
+    db = Database(settings)
+    db.initialize()
+    analyzer = PhotoAnalyzer(db, settings)
+    analyzer.inspect = lambda photo: {**CLEAR_INSPECTION, "sharp": False}
+    image = io.BytesIO()
+    Image.new("RGB", dimensions).save(image, "JPEG")
+    report = analyzer.check("demo-customer", image.getvalue())
+    assert report["accepted"] is False
+    assert len(report["messages"]) == 1 and "quá mờ" in report["messages"][0]
+
+
+def test_old_resolution_rejection_is_reassessed_without_paid_check_or_extending_cache(tmp_path):
+    settings = Settings(data_dir=tmp_path, gemini_api_key="", seed_demo=True)
+    db = Database(settings)
+    db.initialize()
+    analyzer = PhotoAnalyzer(db, settings)
+    analyzer.inspect = lambda photo: (_ for _ in ()).throw(AssertionError("must reuse cached inspection"))
+    image = io.BytesIO()
+    Image.new("RGB", (474, 633)).save(image, "JPEG")
+    photo = image.getvalue()
+    old_report = {"accepted": False, "resolution_ok": False, "checks": CLEAR_INSPECTION,
+        "messages": ["Dùng ảnh tối thiểu 512 × 768 px, chụp dọc toàn thân."]}
+    expires = int(time.time()) + 600
+    digest = hashlib.sha256(photo).hexdigest()
+    with db.connect() as conn:
+        conn.execute("INSERT INTO photo_checks VALUES (?,?,?,?)", ("demo-customer", digest, json.dumps(old_report), expires))
+    report = analyzer.check("demo-customer", photo)
+    assert report["accepted"] and report["messages"] == [] and report["warnings"]
+    with db.connect() as conn:
+        assert conn.execute("SELECT expires_at FROM photo_checks WHERE user_id=? AND digest=?", ("demo-customer", digest)).fetchone()[0] == expires
 
 
 def test_actual_wearing_evaluation_private_and_removed_with_job(client):

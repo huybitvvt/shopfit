@@ -3,7 +3,7 @@
 ```mermaid
 flowchart LR
     RN[React Native / Expo / TypeScript] --> API[FastAPI]
-    API --> DB[(SQLite)]
+    API --> DB[(Supabase PostgreSQL - Singapore)]
     API --> PRIVATE[Ảnh riêng + URL có chữ ký]
     API --> CATALOG[Ảnh catalog public]
     API --> JOB[ThreadPool: 2 worker]
@@ -47,7 +47,7 @@ Job có `request_key` và hash ảnh/lựa chọn để trả lại đúng lư�
 
 ## Phần cần nâng cấp trước khi vận hành thực tế
 
-Lệnh chờ lưu SQLite nhưng dispatcher/worker vẫn là một tiến trình, chưa phải queue phân tán. Sau restart chỉ tiếp tục việc chưa bắt đầu tạo ảnh hoặc kiểm tra ảnh đã lưu; góc đang gọi tạo ảnh được đánh dấu chưa rõ kết quả để người dùng quyết định. Nâng cấp trước vận hành công khai: worker độc lập có lease, object storage, giới hạn đăng nhập, backup và HTTPS. Dự trù request theo cấu hình không bảo đảm trùng hóa đơn provider khi giá/usage thay đổi.
+Lệnh chờ lưu PostgreSQL trên Supabase Singapore (SQLite khi không đặt `DATABASE_URL`) nhưng dispatcher/worker vẫn là một tiến trình, chưa phải queue phân tán. PostgreSQL dùng khóa advisory theo transaction để giữ tuần tự các quyết định tồn kho, mã yêu cầu và hạn mức AI. Sau restart chỉ tiếp tục việc chưa bắt đầu tạo ảnh hoặc kiểm tra ảnh đã lưu; góc đang gọi tạo ảnh được đánh dấu chưa rõ kết quả để người dùng quyết định. Nâng cấp trước vận hành công khai: worker độc lập có lease, object storage, giới hạn đăng nhập, backup và HTTPS. Dự trù request theo cấu hình không bảo đảm trùng hóa đơn provider khi giá/usage thay đổi. Xem [SUPABASE.md](SUPABASE.md) về kết nối, migration và quyền truy cập.
 
 ## Mục tiêu nghiên cứu để phát triển đồ án
 

@@ -16,7 +16,7 @@ class AIUsage:
         if estimate <= 0 or self.settings.budget_usd <= 0:
             raise HTTPException(503, "Ngân sách AI chưa được shop cấu hình hợp lệ.")
         with self.db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            self.db.begin_write(conn)
             count = conn.execute("SELECT count(*) FROM ai_calls WHERE substr(created_at,1,10)=? AND kind=?", (now()[:10], kind)).fetchone()[0]
             total = conn.execute("SELECT coalesce(sum(estimated_usd),0) FROM ai_calls WHERE substr(created_at,1,10)=?", (now()[:10],)).fetchone()[0]
             if count >= limit or total + estimate > self.settings.budget_usd + 1e-9:

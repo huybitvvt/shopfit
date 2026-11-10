@@ -18,7 +18,7 @@ Phạm vi hiện tại: chạy bản web phát triển tại **http://localhost:
 - Các góc bên/sau lấy ảnh đã thử làm tham chiếu, được AI kiểm tra trang phục/hướng quay; góc lỗi không hiển thị như kết quả thành công. Tạo lại chỉ gọi các góc thiếu, tối đa 2 lần/lượt trong ngày.
 - Đối chiếu với ảnh mặc thật, chấm ba tiêu chí và ghi nhận cảm nhận chật/vừa/rộng. Ảnh đối chứng cũng lưu riêng theo tài khoản.
 - Khóa Gemini chỉ nằm ở backend. Ảnh người dùng không đặt trong thư mục public; liên kết ảnh được ký và hết hạn sau 1 giờ.
-- Chống gửi trùng lượt thử/đặt hàng/tạo lại khi mất phản hồi; hàng đợi SQLite, tiếp tục phần việc an toàn sau restart, giữ ảnh ứng viên để chỉ kiểm tra lại khi lỗi vision. Trần số lời gọi và ngân sách dự trù AI theo ngày UTC.
+- Chống gửi trùng lượt thử/đặt hàng/tạo lại khi mất phản hồi; hàng đợi PostgreSQL trên Supabase, tiếp tục phần việc an toàn sau restart, giữ ảnh ứng viên để chỉ kiểm tra lại khi lỗi vision. Trần số lời gọi và ngân sách dự trù AI theo ngày UTC.
 - Tích hợp mã nguồn banner AdMob thử nghiệm ở cuối danh mục Android; web/Expo Go bỏ qua SDK. Chưa xác nhận quảng cáo trên thiết bị. Hướng dẫn chạy và kịch bản video nộp bài: [docs/ADMOB.md](docs/ADMOB.md).
 
 **Đã kiểm thử bộ bốn ảnh Gemini thực tế** qua OpenVTO: lần kiểm tra sau khi sửa tham chiếu hoàn tất trong 49,9 giây, giữ cùng áo thun ở bốn góc. Dùng avatar tổng hợp của OpenVTO và số đo minh họa, chưa chứng minh độ vừa khi mặc thật. Không tạo video hay mô hình 3D.
@@ -30,10 +30,11 @@ mobile/                  Expo / React Native / TypeScript; giao diện tự xây
   src/app/               Expo Router: catalog, phòng thử, hồ sơ, đối chiếu, giỏ, đơn, quản trị
   src/                   API client, state, kiểu dữ liệu, thành phần giao diện
 backend/
-  app/                   FastAPI, SQLite, tài khoản, bán hàng, xử lý tác vụ
+  app/                   FastAPI, PostgreSQL/Supabase, tài khoản, bán hàng, xử lý tác vụ
   vendor/openvto/        SDK OpenVTO upstream, MIT, kèm giấy phép và commit nguồn
   tests/                 Kiểm thử API và hợp đồng tích hợp OpenVTO
-  data/                  SQLite và ảnh runtime; không đưa vào Git
+  data/                  Ảnh runtime, backup và SQLite khi chạy offline; không đưa vào Git
+supabase/                Cấu hình CLI và migration PostgreSQL
 design-system/           Hệ thống thiết kế
 docs/                    Kiến trúc và nguồn tham khảo
 ```
@@ -68,6 +69,8 @@ Nếu môi trường hiện tại đã được dựng sẵn thì bỏ qua bư�
 ### 2. Cấu hình
 
 Tạo `backend/.env` từ `backend/.env.example`, điền:
+
+Database chính dùng **Supabase Singapore**. Thêm `DATABASE_URL` lấy từ **Connect → Session pooler** vào `backend/.env`; xem [docs/SUPABASE.md](docs/SUPABASE.md) để cấu hình, push schema và chuyển dữ liệu cũ. Để trống URL nếu chỉ chạy SQLite offline. Giữ mật khẩu database ở backend.
 
 ```dotenv
 GEMINI_API_KEY=your-api-key
@@ -139,7 +142,7 @@ npm.cmd run test:e2e
 
 Kiểm thử UI dùng Chromium/Edge headless, khởi động API và Expo nếu chưa chạy. Nếu máy không có Edge, cài browser cho Playwright bằng `npx.cmd --prefix mobile playwright install chromium` hoặc chạy `npx.cmd playwright install chromium` trong `mobile`.
 
-Kiểm thử API dùng SQLite tạm và ảnh do test tạo. Lời gọi Google được thay thế tại ranh giới dịch vụ; **không tiêu tốn Gemini API**. Kiểm thử UI đăng ký một tài khoản test, tạo rồi hủy một đơn; nếu chạy với API đang mở thì các bản ghi test đó vẫn lưu trong database phát triển.
+Kiểm thử API thường dùng SQLite tạm và ảnh do test tạo, không dùng database trong `.env`. Kiểm thử PostgreSQL riêng dùng `TEST_DATABASE_URL` và schema tạm, xem [docs/SUPABASE.md](docs/SUPABASE.md). Lời gọi Google được thay thế tại ranh giới dịch vụ; **không tiêu tốn Gemini API**. Kiểm thử UI đăng ký một tài khoản test, tạo rồi hủy một đơn; nếu chạy với API đang mở thì các bản ghi test đó vẫn lưu trong database phát triển.
 
 Kiểm tra bundle Android, không cần Android SDK:
 
@@ -151,9 +154,9 @@ npm.cmd --prefix mobile run export:android
 
 ## Dữ liệu và giới hạn hiện tại
 
-- SQLite và ảnh nằm trong `backend/data/`. Sao lưu cả thư mục khi cần giữ dữ liệu.
+- Database chính nằm trên Supabase Singapore; ảnh và bản sao SQLite trước migration vẫn ở `backend/data/`. Sao lưu database và thư mục ảnh riêng. Cấu hình và cách chuyển dữ liệu: [docs/SUPABASE.md](docs/SUPABASE.md).
 - Ảnh sản phẩm mẫu lấy từ Unsplash, đóng gói cục bộ trong `backend/assets/` để demo không phụ thuộc mạng ảnh bên ngoài; một số biến thể dùng chung ảnh minh họa. Khi demo chất lượng AI, tải ảnh sản phẩm riêng, chính diện, đúng màu và rõ họa tiết qua tài khoản shop.
-- Worker chạy trong một tiến trình API, tối đa 2 lượt đồng thời; hàng đợi/trạng thái lưu SQLite. Restart tiếp tục phần chưa gọi và kiểm tra ảnh ứng viên đã lưu. Góc gián đoạn khi gọi tạo ảnh cần người dùng chủ động tạo lại, không tự lặp yêu cầu chưa rõ đã tính phí hay chưa.
+- Worker chạy trong một tiến trình API, tối đa 2 lượt đồng thời; hàng đợi/trạng thái lưu PostgreSQL trên Supabase (SQLite khi offline). Restart tiếp tục phần chưa gọi và kiểm tra ảnh ứng viên đã lưu. Góc gián đoạn khi gọi tạo ảnh cần người dùng chủ động tạo lại, không tự lặp yêu cầu chưa rõ đã tính phí hay chưa.
 - Tối đa 2 lượt đang xử lý cho một tài khoản; mặc định 30 lượt/ngày tính theo UTC. Xóa ảnh không đặt lại hạn mức.
 - Một lượt đầy đủ gồm 4 lần tạo ảnh, một lần kiểm tra đầu vào (cache 15 phút theo tài khoản + nội dung ảnh) và 4 lần kiểm tra kết quả, gồm cả mặt trước. Retry tính thêm một lượt trong hạn mức ngày. `AI_IMAGE_DAILY_LIMIT`, `AI_VISION_DAILY_LIMIT` và `AI_DAILY_BUDGET_USD` giới hạn request/dự trù, không thay thế hóa đơn hoặc hạn mức đặt ở Google.
 - Xóa lượt thử xóa ảnh gốc, cả bốn ảnh kết quả, ảnh mặc thật và bản lưu số đo của lượt đó; giữ bản ghi tối thiểu phục vụ hạn mức. Xóa hồ sơ cơ thể riêng không xóa các lượt thử cũ.

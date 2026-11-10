@@ -140,6 +140,7 @@ class PhotoAnalyzer:
         if not cached:
             with self.db.connect() as conn:
                 conn.execute("DELETE FROM photo_checks WHERE expires_at<?", (int(time.time()),))
-                conn.execute("INSERT OR REPLACE INTO photo_checks VALUES (?,?,?,?)",
+                conn.execute("""INSERT INTO photo_checks VALUES (?,?,?,?) ON CONFLICT (user_id,digest)
+                    DO UPDATE SET report=excluded.report,expires_at=excluded.expires_at""",
                              (user_id, digest, json.dumps(report), int(time.time()) + 900))
         return report

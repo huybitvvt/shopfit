@@ -37,7 +37,8 @@ def fitting_routes(db, settings, current_user, admin, service, analyzer):
     def save_profile(body: BodyProfile, user=Depends(current_user)):
         updated = now()
         with db.connect() as conn:
-            conn.execute("INSERT OR REPLACE INTO body_profiles VALUES (?,?,?)", (user["id"], body.model_dump_json(), updated))
+            conn.execute("""INSERT INTO body_profiles VALUES (?,?,?) ON CONFLICT (user_id)
+                DO UPDATE SET profile=excluded.profile,updated_at=excluded.updated_at""", (user["id"], body.model_dump_json(), updated))
         return {"profile": body.model_dump(), "updated_at": updated}
 
     @api.delete("/body-profile", status_code=204)
@@ -126,13 +127,16 @@ def fitting_routes(db, settings, current_user, admin, service, analyzer):
         image = normalize_image(await photo.read(MAX_UPLOAD + 1))
         with db.connect() as conn:
             # Serialize against deletion so a concurrent upload cannot resurrect deleted personal files.
-            conn.execute("BEGIN IMMEDIATE")
+            db.begin_write(conn)
             job = owned_job(conn, job_id, user)
             if not job["result_path"] or job["status"] in ("queued", "processing"):
                 raise HTTPException(409, "Cần có ảnh AI hoàn tất trước khi đối chiếu.")
             path = settings.data_dir / "private" / f"{job_id}-actual.jpg"
             path.write_bytes(image)
-            conn.execute("INSERT OR REPLACE INTO tryon_evaluations VALUES (?,?,?,?,?,?,?,?)",
+            conn.execute("""INSERT INTO tryon_evaluations VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (job_id)
+                DO UPDATE SET actual_path=excluded.actual_path,identity_score=excluded.identity_score,
+                garment_score=excluded.garment_score,fit_score=excluded.fit_score,actual_fit=excluded.actual_fit,
+                notes=excluded.notes,updated_at=excluded.updated_at""",
                          (job_id, str(path), identity_score, garment_score, fit_score, actual_fit, notes, now()))
             row = conn.execute("SELECT * FROM tryon_evaluations WHERE job_id=?", (job_id,)).fetchone()
         return evaluation_data(row, job)

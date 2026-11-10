@@ -1,5 +1,6 @@
 import os
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -12,6 +13,8 @@ load_dotenv(ROOT / ".env")
 @dataclass
 class Settings:
     data_dir: Path = field(default_factory=lambda: Path(os.getenv("DATA_DIR", str(ROOT / "data"))))
+    database_url: str = field(default_factory=lambda: os.getenv("DATABASE_URL", "").strip())
+    database_schema: str = field(default_factory=lambda: os.getenv("DATABASE_SCHEMA", "public"))
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     image_model: str = field(default_factory=lambda: os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image"))
     vision_model: str = field(default_factory=lambda: os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash"))
@@ -27,6 +30,10 @@ class Settings:
     cors_origins: list[str] = field(default_factory=lambda: os.getenv("CORS_ORIGINS", "http://localhost:8081,http://localhost:8082").split(","))
 
     def __post_init__(self):
+        if self.database_url and not self.database_url.startswith(("postgresql://", "postgres://")):
+            raise ValueError("DATABASE_URL must be a PostgreSQL connection URL")
+        if not re.fullmatch(r"[a-z_][a-z0-9_]*", self.database_schema):
+            raise ValueError("DATABASE_SCHEMA must be a lowercase SQL identifier")
         if any(not math.isfinite(v) or v <= 0 for v in (self.budget_usd, self.image_estimate_usd, self.vision_estimate_usd)):
             raise ValueError("AI budget and estimates must be finite positive amounts")
         if min(self.daily_limit, self.image_daily_limit, self.vision_daily_limit) < 0:

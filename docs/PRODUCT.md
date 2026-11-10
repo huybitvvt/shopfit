@@ -13,7 +13,7 @@ Dashboard đánh dấu cần kiểm tra nếu có ít nhất 3 phản hồi cho 
 ## Vận hành AI
 
 - Client lưu mã yêu cầu ngẫu nhiên theo dấu vân tay của nội dung; gửi lại sau mất phản hồi dùng cùng mã. Server ràng buộc mã vào nội dung và tài khoản, không tạo thêm job hoặc trừ kho hai lần. Mã đã dùng với nội dung khác trả lỗi; job đã xóa không bị tự tạo lại.
-- Hàng đợi và trạng thái từng góc được lưu SQLite. Sau restart, tiếp tục việc chưa gọi tạo ảnh và kiểm tra ảnh ứng viên đã lưu. Góc gián đoạn trong lúc gọi tạo ảnh cần người dùng tự chọn retry, vì chưa biết provider đã tính phí hay chưa. Không hứa exactly-once ở provider khi mạng lỗi.
+- Hàng đợi và trạng thái từng góc được lưu PostgreSQL trên Supabase Singapore (SQLite khi offline). Sau restart, tiếp tục việc chưa gọi tạo ảnh và kiểm tra ảnh ứng viên đã lưu. Góc gián đoạn trong lúc gọi tạo ảnh cần người dùng tự chọn retry, vì chưa biết provider đã tính phí hay chưa. Không hứa exactly-once ở provider khi mạng lỗi.
 - Ảnh ứng viên được lưu riêng trước kiểm tra; lỗi kiểm tra tạm thời chỉ kiểm tra lại ảnh đó, không tạo lại ảnh tính phí. Ảnh sai trang phục bị loại và không cấp URL kết quả.
 - Mỗi lời gọi được ghi dự trù trước khi gọi. Lời gọi lỗi/không rõ kết quả vẫn giữ dự trù; có trần số request và dự trù USD theo UTC. SDK được cấu hình một network attempt. Giá cấu hình không phải token usage/hóa đơn thực; cần đối chiếu billing Google.
 - Chỉ hỗ trợ một tiến trình Uvicorn cho worker hiện tại; đây chưa phải hệ thống queue phân tán.

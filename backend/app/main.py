@@ -3,7 +3,6 @@ import hashlib
 import json
 import re
 import secrets
-import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -17,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from .config import Settings
-from .db import Database, now
+from .db import Database, INTEGRITY_ERRORS, now
 from .security import hash_password, token_hash, verify_password
 from .tryon import MAX_UPLOAD, TryOnService, normalize_image
 from .photo_checks import PhotoAnalyzer
@@ -129,10 +128,13 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        db.initialize()
-        service.recover()
-        yield
-        service.close()
+        try:
+            db.initialize()
+            service.recover()
+            yield
+        finally:
+            service.close()
+            db.close()
 
     app = FastAPI(title="ShopFit API", version="0.1.0", lifespan=lifespan)
     app.state.db = db
@@ -163,7 +165,10 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "ai_ready": service.engine.enabled, "engine": "openvto", "model": settings.image_model, "demo_accounts": settings.seed_demo}
+        with db.connect() as conn:
+            conn.execute("SELECT 1").fetchone()
+        return {"status": "ok", "database": "postgresql" if db.postgres else "sqlite",
+                "ai_ready": service.engine.enabled, "engine": "openvto", "model": settings.image_model, "demo_accounts": settings.seed_demo}
 
     @app.post("/api/auth/register", status_code=201)
     def register(body: Register):
@@ -173,7 +178,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             user = {"id": uuid.uuid4().hex, "name": body.name.strip(), "email": body.email, "role": "customer"}
             try:
                 conn.execute("INSERT INTO users VALUES (?,?,?,?,?,?)", (user["id"], user["name"], user["email"], hash_password(body.password), "customer", now()))
-            except sqlite3.IntegrityError:
+            except INTEGRITY_ERRORS:
                 raise HTTPException(409, "Email này đã được đăng ký.")
             return issue_session(conn, user)
 
@@ -197,7 +202,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     @app.get("/api/products")
     def products():
         with db.connect() as conn:
-            return [db.product(conn, row) for row in conn.execute("SELECT * FROM products WHERE active=1 ORDER BY featured DESC, rowid")]
+            return [db.product(conn, row) for row in conn.execute("SELECT * FROM products WHERE active=1 ORDER BY featured DESC, created_at, id")]
 
     @app.get("/api/products/{product_id}")
     def product(product_id: str):
@@ -210,7 +215,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     @app.get("/api/admin/products")
     def admin_products(user=Depends(admin)):
         with db.connect() as conn:
-            return [db.product(conn, row) for row in conn.execute("SELECT * FROM products ORDER BY rowid DESC")]
+            return [db.product(conn, row) for row in conn.execute("SELECT * FROM products ORDER BY created_at DESC, id DESC")]
 
     @app.post("/api/admin/upload", status_code=201)
     async def upload(file: Annotated[UploadFile, File()], user=Depends(admin)):
@@ -262,7 +267,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     def checkout(body: Checkout, request_key: Annotated[str | None, Header(alias="X-Idempotency-Key", min_length=16, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")] = None, user=Depends(current_user)):
         oid = uuid.uuid4().hex
         with db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            db.begin_write(conn)
             fingerprint = hashlib.sha256(body.model_dump_json().encode()).hexdigest()
             if request_key:
                 existing = conn.execute("SELECT * FROM orders WHERE user_id=? AND request_key=?", (user["id"], request_key)).fetchone()
@@ -298,7 +303,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     def order_status(order_id: str, body: StatusPatch, user=Depends(current_user)):
         transitions = {"pending": {"confirmed", "cancelled"}, "confirmed": {"shipping", "cancelled"}, "shipping": {"completed"}, "completed": set(), "cancelled": set()}
         with db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            db.begin_write(conn)
             order = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
             if not order or (user["role"] != "admin" and order["user_id"] != user["id"]):
                 raise HTTPException(404, "Không tìm thấy đơn hàng.")
@@ -366,7 +371,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     @app.delete("/api/tryons/{job_id}", status_code=204)
     def delete_tryon(job_id: str, user=Depends(current_user)):
         with db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            db.begin_write(conn)
             row = conn.execute("SELECT * FROM tryons WHERE id=? AND user_id=? AND deleted=0", (job_id, user["id"])).fetchone()
             if not row:
                 raise HTTPException(404, "Không tìm thấy lượt thử đồ.")

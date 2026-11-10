@@ -161,7 +161,7 @@ class TryOnService:
     def recover(self):
         """Resume only unstarted work. Never automatically repeat an uncertain paid image call."""
         with self.db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            self.db.begin_write(conn)
             conn.execute("UPDATE ai_calls SET status='unknown',completed_at=? WHERE status='started'", (now(),))
             for row in conn.execute("SELECT * FROM tryons WHERE status IN ('queued','processing') AND deleted=0").fetchall():
                 views = json.loads(row["views"])
@@ -220,7 +220,7 @@ class TryOnService:
         fingerprint = self.fingerprint(product["id"], color, size, photo)
         try:
             with self.db.connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
+                self.db.begin_write(conn)
                 existing = self._existing(conn.execute("SELECT id,deleted,request_fingerprint FROM tryons WHERE user_id=? AND request_key=?", (user_id, request_key)).fetchone(), fingerprint)
                 if existing:
                     return existing
@@ -251,7 +251,7 @@ class TryOnService:
         if not self.engine.enabled:
             raise HTTPException(503, "Phòng thử AI chưa được cấu hình.")
         with self.db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            self.db.begin_write(conn)
             if request_key:
                 previous = conn.execute("SELECT job_id FROM retry_requests WHERE user_id=? AND request_key=?", (user_id, request_key)).fetchone()
                 if previous:

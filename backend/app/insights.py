@@ -62,7 +62,7 @@ def insight_routes(db, settings, current_user, admin):
     def add_reference(body: WardrobeWrite, user=Depends(current_user)):
         rid = uuid.uuid4().hex
         with db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            db.begin_write(conn)
             if conn.execute("SELECT count(*) FROM wardrobe WHERE user_id=?", (user["id"],)).fetchone()[0] >= 30:
                 raise HTTPException(400, "Tối đa 30 món đồ tham chiếu. Hãy xóa món không còn dùng.")
             conn.execute("INSERT INTO wardrobe VALUES (?,?,?,?,?,?,?)", (rid, user["id"], body.name.strip(), body.category,
@@ -86,14 +86,16 @@ def insight_routes(db, settings, current_user, admin):
     @api.post("/orders/{order_id}/items/{item_id}/fit-review")
     def save_review(order_id: str, item_id: int, body: FitReviewWrite, user=Depends(current_user)):
         with db.connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            db.begin_write(conn)
             row = conn.execute("""SELECT o.status FROM orders o JOIN order_items i ON i.order_id=o.id
                 WHERE o.id=? AND i.id=? AND o.user_id=?""", (order_id, item_id, user["id"])).fetchone()
             if not row:
                 raise HTTPException(404, "Không tìm thấy sản phẩm trong đơn của bạn.")
             if row["status"] != "completed":
                 raise HTTPException(409, "Chỉ đánh giá độ vừa sau khi đơn đã giao hoàn tất.")
-            conn.execute("INSERT OR REPLACE INTO fit_reviews VALUES (?,?,?,?,?)", (item_id, user["id"], body.actual_fit, body.notes.strip(), now()))
+            conn.execute("""INSERT INTO fit_reviews VALUES (?,?,?,?,?) ON CONFLICT (order_item_id)
+                DO UPDATE SET user_id=excluded.user_id,actual_fit=excluded.actual_fit,
+                notes=excluded.notes,updated_at=excluded.updated_at""", (item_id, user["id"], body.actual_fit, body.notes.strip(), now()))
             return dict(conn.execute("SELECT actual_fit,notes,updated_at FROM fit_reviews WHERE order_item_id=?", (item_id,)).fetchone())
 
     @api.get("/products/{product_id}/fit-feedback")
@@ -117,8 +119,9 @@ def insight_routes(db, settings, current_user, admin):
             rows = product_feedback(conn)
             for row in rows:
                 row["name"] = conn.execute("SELECT name FROM products WHERE id=?", (row["product_id"],)).fetchone()[0]
-            counts = conn.execute("""SELECT count(*) AS total, sum(status='completed') AS completed,
-                sum(status='partial') AS partial, sum(status='failed') AS failed,avg(duration_ms) AS average_ms FROM tryons WHERE deleted=0""").fetchone()
+            counts = conn.execute("""SELECT count(*) AS total, sum(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed,
+                sum(CASE WHEN status='partial' THEN 1 ELSE 0 END) AS partial,
+                sum(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,avg(duration_ms) AS average_ms FROM tryons WHERE deleted=0""").fetchone()
             return {"rows": rows, "review_count": sum(r["total"] for r in rows), "tryons": dict(counts),
                     "recent_reviews": [dict(r) for r in conn.execute("""SELECT i.product_id,i.name,i.size,i.color,r.actual_fit,r.notes,r.updated_at
                         FROM fit_reviews r JOIN order_items i ON i.id=r.order_item_id JOIN orders o ON o.id=i.order_id

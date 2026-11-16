@@ -5,10 +5,29 @@
 1. Đăng nhập khách → Cá nhân → Hồ sơ cơ thể. Nhập chiều cao, cân nặng và vòng ngực cho áo; eo/mông cho quần; cả ba cho váy. Chọn thích mặc gọn/vừa/rộng.
 2. Chủ shop vào Quản trị → **Bảng số đo & ảnh sau** của sản phẩm. Nhập số đo thành phẩm bằng cm. Ngực/eo/mông là cả vòng, không phải ngang trải phẳng. Đánh dấu đã đo chỉ sau khi đo đồ thật. Có thể tải ảnh mặt sau đúng mẫu/màu catalog.
 3. Mở sản phẩm, chọn màu. Tư vấn đưa ra size còn hàng đáp ứng độ dư và giải thích cơ thể / thành phẩm / chênh lệch / mục tiêu. Nút áp dụng gợi ý đổi size; khách vẫn tự chọn size khác. Size đó được chuyển sang phòng thử.
-4. Chọn/chụp một ảnh dọc, chỉ một người, trọn đầu đến bàn chân, đứng nhìn thẳng, tay cách nhẹ thân, nền gọn và đủ sáng. Khuyến nghị từ 512×768 px, tối đa 10 MB khi tải lên. Ảnh nhỏ hơn vẫn được dùng nếu đủ rõ; kích thước chỉ hiện lưu ý, không tự phóng lớn ảnh để vượt ngưỡng. Về độ nét, chỉ yêu cầu chụp lại khi quá mờ/vỡ hình khiến người hoặc trang phục không đọc được; vẫn kiểm tra toàn thân, tư thế và che khuất. Ảnh hỏng hoặc có cạnh dưới 128 px bị từ chối ở bước đọc tệp.
-5. Bấm **Tạo 4 ảnh thử đồ của tôi**. Mặt trước tạo trước, rồi các góc trái/sau/phải dùng ảnh mặt trước đã thay đồ làm nguồn người. Mỗi góc được lưu ngay. Dùng mũi tên hoặc bốn nút góc; chuyển ảnh vòng từ phải về trước và ngược lại.
+4. Chọn/chụp một ảnh dọc, chỉ một người, trọn đầu đến bàn chân, đứng nhìn thẳng, tay cách nhẹ thân, nền gọn và đủ sáng. Khuyến nghị từ 512×768 px, tối đa 10 MB khi tải lên. Không có ngưỡng pixel tối thiểu: ảnh nhỏ vẫn được dùng nếu đủ rõ, kích thước chỉ hiện lưu ý và không tự phóng lớn ảnh. Về độ nét, chỉ yêu cầu chụp lại khi quá mờ/vỡ hình khiến người hoặc trang phục không đọc được; vẫn kiểm tra toàn thân, tư thế và che khuất. Ảnh hỏng, file quá 10 MB hoặc ảnh vượt giới hạn giải mã của server bị từ chối ở bước đọc tệp.
+5. Bấm **Tạo 4 ảnh thử đồ của tôi**. Mặt trước tạo và kiểm tra trước, rồi các góc trái/sau/phải chạy song song, dùng cùng ảnh mặt trước đã thay đồ làm nguồn người. Mỗi góc được lưu ngay. Dùng mũi tên hoặc bốn nút góc; chuyển ảnh vòng từ phải về trước và ngược lại.
 6. Ở mặt trước, dùng **So sánh với ảnh gốc**. Nếu có lỗi provider hoặc kiểm tra góc không đạt, ảnh tốt vẫn còn; **Tạo lại góc còn thiếu** chỉ tạo những góc chưa có. Tối đa hai lần tạo lại trong cùng ngày UTC.
 7. Chọn **Đối chiếu với ảnh mặc thật**, mặc đúng sản phẩm/màu/size, chụp cùng tư thế và ánh sáng, tải ảnh và tự chấm 1–5 cho vóc dáng, chi tiết đồ, độ vừa. Ghi nhận chật/vừa/rộng và nhận xét.
+
+## Cấu hình tốc độ
+
+Trong `backend/.env`:
+
+```dotenv
+GEMINI_IMAGE_MODEL=gemini-3.1-flash-lite-image
+GEMINI_IMAGE_SIZE=1K
+GEMINI_VISION_THINKING_BUDGET=0
+TRYON_VIEW_CONCURRENCY=3
+```
+
+Mặc định dùng Flash Lite Image, giữ đầu ra 1K. Có thể chuyển lại `GEMINI_IMAGE_MODEL=gemini-3.1-flash-image` để so sánh chất lượng với model trước. Riêng model Flash Image này còn hỗ trợ `GEMINI_IMAGE_SIZE=512`; Flash Lite Image chỉ dùng 1K. Đây là độ phân giải **đầu ra**, độc lập với kích thước ảnh người dùng tải lên. Khởi động lại API sau khi đổi cấu hình.
+
+Ba góc phụ chạy đồng thời sau khi mặt trước được duyệt. Server giới hạn tổng số yêu cầu tạo ảnh đang gọi Google theo `TRYON_VIEW_CONCURRENCY` (1–3), kể cả khi hai lượt thử cùng chạy. Giá trị `1` trả về cách chạy tuần tự. Vẫn tạo tối đa bốn ảnh cho một lượt hoàn chỉnh, vẫn kiểm tra từng ảnh và chỉ tạo lại góc thiếu khi người dùng yêu cầu.
+
+Các kết nối Google được dùng lại theo thread và đóng khi backend dừng. Kiểm tra bằng Gemini 2.5 Flash mặc định tắt dynamic thinking; đổi `GEMINI_VISION_THINKING_BUDGET=-1` để trở về mặc định suy luận động của model. Model vision khác giữ mặc định riêng. Không có retry ngầm làm tăng lời gọi tính phí.
+
+Lần đo ngày 10/11/2026 với cùng ảnh 303×457 px và cùng sản phẩm minh họa: kiểm tra đầu vào khoảng 4,8 giây. Với ba góc phụ chạy song song, bộ bốn góc 1K mất 41,9 giây ở Flash Image và 25,1 giây ở Flash Lite Image; mặt trước Lite xuất hiện sau khoảng 12,1 giây. Cả bốn góc của mỗi bộ đều đạt kiểm tra, thời gian này chưa cộng kiểm tra đầu vào khi cache trống. Một mẫu không phải cam kết thời gian: độ trễ Google, quota và tải đồng thời vẫn ảnh hưởng. Tham khảo [cấu hình ảnh Gemini](https://ai.google.dev/gemini-api/docs/image-generation) và [thinking budget](https://ai.google.dev/gemini-api/docs/thinking).
 
 ## Quy tắc tư vấn
 

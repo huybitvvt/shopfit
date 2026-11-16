@@ -3,8 +3,8 @@
     "repository":  "https://github.com/Prompt-Haus/OpenVTO",
     "source":  "packages/sdk",
     "license":  "MIT",
-    "modifications":  [
-
-                      ],
+    "modifications": [
+        "Expose optional image_size and image_thinking_level on OpenVTO/GoogleProvider for ShopFit latency tuning; upstream defaults preserved."
+    ],
     "imported":  "2026-10-26"
 }

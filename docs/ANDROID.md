@@ -42,6 +42,28 @@ Chuyển APK sang điện thoại và mở file để cài, hoặc kết nối U
 
 Sau khi cài, mở app → Kết nối shop → nhập URL LAN → đăng nhập. Không đặt Gemini key vào app hoặc máy điện thoại.
 
+## Điện thoại thật qua USB và cửa sổ quay demo
+
+Không cần cùng Wi-Fi nếu dùng đường hầm ADB qua cáp USB. Bật USB debugging trên điện thoại, chấp nhận kết nối máy tính rồi kiểm tra `adb devices -l`. Backend vẫn chạy trên laptop.
+
+Để APK mặc định dùng kết nối USB trên điện thoại ARM64:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build-android.ps1 -ApiUrl http://127.0.0.1:8000 -Architectures arm64-v8a
+adb -d install -r artifacts/ShopFit-preview.apk
+adb -d reverse tcp:8000 tcp:8000
+```
+
+Nếu dùng APK có địa chỉ mặc định khác, vào **Cá nhân → Kết nối shop** và đặt `http://127.0.0.1:8000` sau khi tạo đường hầm. Địa chỉ này chỉ trỏ về backend trên laptop khi có `adb reverse`; cần tạo lại đường hầm sau khi ngắt kết nối USB.
+
+Dùng [scrcpy chính thức](https://github.com/Genymobile/scrcpy) để hiện màn hình Samsung trong cửa sổ nhỏ trên Windows:
+
+```powershell
+scrcpy --window-title=ShopFit-Samsung --window-height=620 --always-on-top --no-audio --max-fps=30
+```
+
+Kéo cửa sổ cạnh VS Code rồi dùng phần mềm quay màn hình laptop để quay cả hai. APK preview đã chứa bundle giao diện, không cần Metro khi demo; giữ backend và cáp USB hoạt động. Đóng tab `backend/.env` trước khi quay để tránh lộ khóa.
+
 ## Kiểm tra thiết bị
 
 - AdMob: build lại sau khi thêm SDK, cuộn cuối màn Khám phá, kiểm tra banner Google có nhãn **Test Ad**; không xác nhận thành công chỉ dựa vào nhãn khu vực của ShopFit. Xem [ADMOB.md](ADMOB.md) để quay video bài tập. Web và Expo Go không có quảng cáo.

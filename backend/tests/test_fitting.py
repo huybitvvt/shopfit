@@ -83,13 +83,13 @@ def test_partial_failure_retries_only_missing_view(client):
     customer = login(client)
     job = wait_job(client, customer, create_tryon(client, customer).json()["id"])
     assert job["status"] == "partial" and job["result_url"]
-    assert calls == ["left", "back", "right"]
+    assert sorted(calls) == ["back", "left", "right"]
     engine.generate_view = lambda *args: (calls.append(args[3]) or original(*args))
     assert client.post(f"/api/tryons/{job['id']}/retry", headers=login(client, True)).status_code == 404
     assert client.post(f"/api/tryons/{job['id']}/retry", headers=customer).status_code == 202
     retried = wait_job(client, customer, job["id"])
     assert retried["status"] == "completed" and retried["retry_count"] == 1
-    assert calls == ["left", "back", "right", "back"]
+    assert sorted(calls) == ["back", "back", "left", "right"]
     assert client.post(f"/api/tryons/{job['id']}/retry", headers=customer).status_code == 409
 
 
@@ -121,20 +121,21 @@ def test_photo_checks_reject_crop_and_cache_per_owner(tmp_path):
     assert len(calls) == 2
 
 
-def test_clear_small_photo_is_accepted_without_upscaling(tmp_path):
+@pytest.mark.parametrize("dimensions", [(474, 633), (303, 457), (80, 120)])
+def test_clear_small_photo_is_accepted_without_upscaling(tmp_path, dimensions):
     settings = Settings(data_dir=tmp_path, gemini_api_key="", seed_demo=True)
     db = Database(settings)
     db.initialize()
     analyzer = PhotoAnalyzer(db, settings)
     analyzer.inspect = lambda photo: CLEAR_INSPECTION.copy()
     image = io.BytesIO()
-    Image.new("RGB", (474, 633)).save(image, "JPEG")
+    Image.new("RGB", dimensions).save(image, "JPEG")
     photo = normalize_image(image.getvalue())
     with Image.open(io.BytesIO(photo)) as decoded:
-        assert decoded.size == (474, 633)
+        assert decoded.size == dimensions
     report = analyzer.check("demo-customer", photo)
     assert report["accepted"] and report["messages"] == []
-    assert report["resolution_ok"] is False and "474 × 633" in report["warnings"][0]
+    assert report["resolution_ok"] is False and f"{dimensions[0]} × {dimensions[1]}" in report["warnings"][0]
 
 
 @pytest.mark.parametrize("dimensions", [(474, 633), (768, 1024)])

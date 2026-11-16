@@ -31,7 +31,7 @@ Trạng thái đơn: `pending → confirmed → shipping → completed`. Có th�
 2. Server chuẩn hóa JPEG, xoay EXIF, giới hạn 10 MB/cạnh 1600; vision kiểm tra toàn thân/tư thế/độ rõ, cache theo chủ tài khoản + hash ảnh trong 15 phút.
 3. Server lưu `queued` cùng bản chụp hồ sơ, bảng size, size được chọn và kết quả kiểm tra ảnh trước khi đưa vào worker.
 4. Worker tải ảnh catalog từ thư mục sản phẩm hoặc host seed Unsplash cho phép; không fetch URL tùy ý.
-5. `OpenVTOEngine` gọi pipeline upstream cho mặt trước. Sau đó lần lượt gọi provider edit của OpenVTO cho trái/sau/phải, dùng ảnh mặt trước đã thay đồ và ảnh catalog. Không gửi lại ảnh toàn thân mặc đồ cũ trong bước góc bên. Key từ `backend/.env`.
+5. `OpenVTOEngine` gọi pipeline upstream cho mặt trước và kiểm tra ảnh. Ba góc trái/sau/phải sau đó chạy song song qua provider edit của OpenVTO, dùng cùng ảnh mặt trước đã thay đồ và ảnh catalog. Semaphore giới hạn tổng số lần tạo ảnh đồng thời (mặc định 3); cập nhật trạng thái các góc được khóa theo lượt để không ghi đè kết quả của nhau. Không gửi lại ảnh toàn thân mặc đồ cũ trong bước góc bên. Key từ `backend/.env`; cấu hình tốc độ trong [FITTING.md](FITTING.md).
 6. Ảnh bên/sau được vision kiểm tra trang phục và hướng quay. Góc đạt được lưu ngay vùng private; cuối lượt chuyển `completed` / `partial` / `failed`. Tạo lại thủ công chỉ gọi góc thiếu, tối đa hai lần trong ngày tạo; tính vào quota và không gọi lại ảnh đã có.
 7. App polling mỗi 2 giây khi màn hình đang mở; lịch sử và trạng thái được đọc lại khi quay về phòng thử.
 

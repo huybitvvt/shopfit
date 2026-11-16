@@ -74,7 +74,7 @@ Database chính dùng **Supabase Singapore**. Thêm `DATABASE_URL` lấy từ **
 
 ```dotenv
 GEMINI_API_KEY=your-api-key
-GEMINI_IMAGE_MODEL=gemini-3.1-flash-image
+GEMINI_IMAGE_MODEL=gemini-3.1-flash-lite-image
 GEMINI_VISION_MODEL=gemini-2.5-flash
 ```
 

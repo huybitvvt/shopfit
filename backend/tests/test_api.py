@@ -205,7 +205,12 @@ def test_unconfigured_ai_returns_explicit_unavailable(tmp_path):
         assert create_tryon(client, login(client)).status_code == 503
 
 
-def test_openvto_pipeline_uses_google_provider_and_both_reference_images(monkeypatch, tmp_path):
+@pytest.mark.parametrize("image_model,image_size", [
+    ("gemini-3.1-flash-image", "512"),
+    ("gemini-3.1-flash-image", "1K"),
+    ("gemini-3.1-flash-lite-image", "1K"),
+])
+def test_openvto_pipeline_uses_google_provider_and_both_reference_images(monkeypatch, tmp_path, image_model, image_size):
     from openvto.providers.google import GoogleProvider
 
     captured = {}
@@ -215,14 +220,16 @@ def test_openvto_pipeline_uses_google_provider_and_both_reference_images(monkeyp
         return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[SimpleNamespace(inline_data=SimpleNamespace(data=photo_bytes()))]))])
 
     monkeypatch.setattr(GoogleProvider, "_ensure_client", lambda self: SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)))
-    engine = OpenVTOEngine(Settings(data_dir=tmp_path, gemini_api_key="test-key-not-real"))
+    engine = OpenVTOEngine(Settings(data_dir=tmp_path, gemini_api_key="test-key-not-real", image_model=image_model, image_size=image_size))
     image, metadata = engine.generate(photo_bytes(), photo_bytes(), "tops", "Trắng", {"selected_size": "L", "body": {"chest_cm": 94}})
     assert Image.open(io.BytesIO(image)).size == (256, 384)
     parts = captured["contents"][0].parts
     assert sum(p.inline_data is not None for p in parts) == 2
     assert any(p.text and "Trắng" in p.text for p in parts)
     assert any(p.text and '"selected_size": "L"' in p.text and '"chest_cm": 94' in p.text for p in parts)
-    assert captured["model"] == "gemini-3.1-flash-image"
+    assert captured["model"] == image_model
+    assert captured["config"].image_config.image_size == image_size
+    assert captured["config"].thinking_config.thinking_level.value == "MINIMAL"
     assert metadata["provider"] == "openvto/google"
     captured.clear()
     engine.generate_view(photo_bytes(), photo_bytes(), photo_bytes(), "left", "tops", "Trắng", {"selected_size": "L"})
@@ -230,3 +237,5 @@ def test_openvto_pipeline_uses_google_provider_and_both_reference_images(monkeyp
     # Do not include the original full-body photo: its old outfit caused side views to revert.
     assert sum(p.inline_data is not None for p in parts) == 2
     assert any(p.text and "LEFT profile" in p.text and '"selected_size": "L"' in p.text for p in parts)
+    assert captured["config"].image_config.image_size == image_size
+    engine.close()

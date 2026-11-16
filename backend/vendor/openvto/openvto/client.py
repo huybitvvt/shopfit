@@ -48,6 +48,8 @@ class OpenVTO:
         image_model: str = ImageModel.NANO_BANANA_PRO.value,
         video_model: str = VideoModel.VEO_31_FAST.value,
         prompt_preset: str = "studio_v1",
+        image_size: str = "1K",
+        image_thinking_level: str | None = None,
     ) -> None:
         """Initialize the OpenVTO client.
 
@@ -57,12 +59,16 @@ class OpenVTO:
             image_model: Image generation model (default: gemini-2.5-flash-image).
             video_model: Video generation model (default: veo-3.1).
             prompt_preset: Prompt template preset to use.
+            image_size: Google image output resolution (default 1K).
+            image_thinking_level: Optional thinking level for supporting image models.
         """
         self.provider_name = provider
         self.api_key = api_key
         self.image_model = image_model
         self.video_model = video_model
         self.prompt_preset = prompt_preset
+        self.image_size = image_size
+        self.image_thinking_level = image_thinking_level
 
         # Initialize provider
         self._provider = self._create_provider()
@@ -74,6 +80,8 @@ class OpenVTO:
                 api_key=self.api_key,
                 image_model=self.image_model,
                 video_model=self.video_model,
+                image_size=self.image_size,
+                image_thinking_level=self.image_thinking_level,
             )
         elif self.provider_name == "mock":
             return MockProvider()

@@ -8,7 +8,7 @@ import secrets
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -20,6 +20,7 @@ from .config import Settings
 from .db import Database, now
 from .sizing import advise
 from .ai_usage import AIUsage
+from .gemini import GeminiClients
 
 ANGLES = ("front", "left", "back", "right")
 
@@ -33,8 +34,6 @@ def normalize_image(data: bytes) -> bytes:
         raise HTTPException(400, "Ảnh phải có dung lượng từ 1 byte đến 10 MB.")
     try:
         with Image.open(io.BytesIO(data)) as source:
-            if source.width < 128 or source.height < 128:
-                raise HTTPException(400, "Ảnh cần có kích thước tối thiểu 128 × 128 pixel.")
             image = ImageOps.exif_transpose(source).convert("RGB")
             image.thumbnail((1600, 1600))
             out = io.BytesIO()
@@ -48,16 +47,21 @@ class OpenVTOEngine:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.enabled = bool(settings.gemini_api_key)
+        self.clients = GeminiClients(settings, 120000)
+        self.local = threading.local()
 
     def _client(self):
         from openvto import OpenVTO
-        from google import genai
-        from google.genai import types
-        client = OpenVTO(provider="google", api_key=self.settings.gemini_api_key, image_model=self.settings.image_model)
-        # One network attempt per reservation; do not silently repeat a paid image request.
-        client.provider._client = genai.Client(api_key=self.settings.gemini_api_key,
-            http_options=types.HttpOptions(timeout=120000, retry_options=types.HttpRetryOptions(attempts=1)))
-        return client
+        if not hasattr(self.local, "client"):
+            client = OpenVTO(provider="google", api_key=self.settings.gemini_api_key, image_model=self.settings.image_model,
+                image_size=self.settings.image_size,
+                image_thinking_level="minimal" if self.settings.image_model.startswith(("gemini-3.1-flash-image", "gemini-3.1-flash-lite-image")) else None)
+            client.provider._client = self.clients.get()
+            self.local.client = client
+        return self.local.client
+
+    def close(self):
+        self.clients.close()
 
     @staticmethod
     def _context(context):
@@ -124,6 +128,8 @@ class TryOnService:
         self.analyzer = analyzer
         self.usage = usage or AIUsage(db, settings)
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="shopfit-vto")
+        self.view_pool = ThreadPoolExecutor(max_workers=settings.view_concurrency, thread_name_prefix="shopfit-view")
+        self.generation_slots = threading.BoundedSemaphore(settings.view_concurrency)
         self.capacity = threading.BoundedSemaphore(12)
         self.inflight = set()
         self.lock = threading.Lock()
@@ -135,6 +141,11 @@ class TryOnService:
         if self.dispatcher:
             self.dispatcher.join(timeout=2)
         self.pool.shutdown(wait=True, cancel_futures=False)
+        self.view_pool.shutdown(wait=True, cancel_futures=False)
+        for resource in (self.engine, self.analyzer):
+            close = getattr(resource, "close", None)
+            if close:
+                close()
 
     @staticmethod
     def fingerprint(product_id, color, size, photo):
@@ -240,7 +251,7 @@ class TryOnService:
                     size,body_snapshot,fit_snapshot,photo_check,views,request_key,request_fingerprint,updated_at) VALUES (?,?,?,'queued',?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (job_id, user_id, product["id"], str(path), color, secrets.token_hex(32), self.settings.image_model, now(),
                      size, json.dumps(profile), json.dumps(fit), json.dumps(photo_check),
-                     json.dumps({a: {"status": "pending"} for a in ANGLES}), request_key, fingerprint, now()))
+                     json.dumps({a: {"status": "pending"} for a in self.settings.tryon_angles}), request_key, fingerprint, now()))
         except Exception:
             path.unlink(missing_ok=True)
             raise
@@ -295,9 +306,50 @@ class TryOnService:
                     raise ValueError("Catalog image too large")
         return normalize_image(bytes(data))
 
+    def _render_view(self, job_id, angle, initial, product, photo, garment, color, context, front, back_garment, publish):
+        view = dict(initial)
+        try:
+            candidate = view.get("candidate_path")
+            if candidate and Path(candidate).is_file():
+                output = Path(candidate).read_bytes()
+            else:
+                view = {"status": "processing"}
+                publish(angle, view)
+                # Bound image requests across both jobs, including front renders.
+                with self.generation_slots:
+                    if angle == "front":
+                        image, _ = self.usage.call("image", self.engine.generate, photo, garment, product["tryon_category"], color, context, job_id=job_id, angle=angle)
+                    else:
+                        image, _ = self.usage.call("image", self.engine.generate_view, photo, garment, front, angle, product["tryon_category"], color, context, back_garment, job_id=job_id, angle=angle)
+                output = normalize_image(image)
+            path = self.settings.data_dir / "private" / f"{job_id}-{angle}.jpg"
+            temp_path = path.with_suffix(".tmp")
+            temp_path.write_bytes(output)
+            temp_path.replace(path)
+            view = {"status": "validating", "candidate_path": str(path)}
+            publish(angle, view)
+            if angle == "front":
+                quality = self.usage.call("vision", self.analyzer.validate_front, photo, output, garment, product["tryon_category"], color, job_id=job_id, angle=angle)
+            else:
+                quality = self.usage.call("vision", self.analyzer.validate_view, front, output, angle, job_id=job_id, angle=angle)
+            if quality["accepted"]:
+                view = {"status": "completed", "path": str(path), "quality": quality}
+            else:
+                path.unlink(missing_ok=True)
+                view = {"status": "failed", "error": "Ảnh chưa đạt kiểm tra toàn thân, trang phục hoặc hướng quay. Có thể tạo lại riêng góc này.", "quality": quality}
+        except Exception as exc:
+            logger.warning("Try-on %s angle %s failed (%s)", job_id, angle, type(exc).__name__)
+            candidate = view.get("candidate_path")
+            message = exc.detail if isinstance(exc, HTTPException) else "Chưa tạo được góc này. Có thể tạo lại riêng góc thiếu."
+            view = {"status": "failed", "error": message}
+            if candidate:
+                view["candidate_path"] = candidate
+        publish(angle, view)
+
     def _run(self, job_id):
         started = time.perf_counter()
-        views = {a: {"status": "pending"} for a in ANGLES}
+        angles = self.settings.tryon_angles
+        views = {a: {"status": "pending"} for a in angles}
         try:
             with self.db.connect() as conn:
                 row = conn.execute("SELECT * FROM tryons WHERE id=?", (job_id,)).fetchone()
@@ -311,57 +363,39 @@ class TryOnService:
             garment = self._garment(product)
             back_url = product["size_chart"].get("back_image_url")
             back_garment = self._garment({"image_url": back_url}) if back_url else None
-            for angle in ANGLES:
-                if views[angle].get("status") == "completed":
-                    continue
-                if angle != "front" and views["front"].get("status") != "completed":
-                    views[angle] = {"status": "failed", "error": "Cần tạo được mặt trước trước khi tạo góc này."}
-                    continue
-                candidate = views[angle].get("candidate_path")
-                try:
-                    if candidate and Path(candidate).is_file():
-                        output = Path(candidate).read_bytes()
-                    else:
-                        views[angle] = {"status": "processing"}
-                        self._save_views(job_id, views)
-                        if angle == "front":
-                            image, _ = self.usage.call("image", self.engine.generate, photo, garment, product["tryon_category"], color, context, job_id=job_id, angle=angle)
-                        else:
-                            front = Path(views["front"]["path"]).read_bytes()
-                            image, _ = self.usage.call("image", self.engine.generate_view, photo, garment, front, angle, product["tryon_category"], color, context, back_garment, job_id=job_id, angle=angle)
-                        output = normalize_image(image)
-                    path = self.settings.data_dir / "private" / f"{job_id}-{angle}.jpg"
-                    temp_path = path.with_suffix(".tmp")
-                    temp_path.write_bytes(output)
-                    temp_path.replace(path)
-                    quality = None
-                    views[angle] = {"status": "validating", "candidate_path": str(path)}
+            views_lock = threading.Lock()
+
+            def publish(angle, view):
+                # Save an entire consistent snapshot; concurrent angles must never
+                # overwrite another angle's completed/candidate state in the database.
+                with views_lock:
+                    views[angle] = view
                     self._save_views(job_id, views)
-                    if angle == "front":
-                        quality = self.usage.call("vision", self.analyzer.validate_front, photo, output, garment, product["tryon_category"], color, job_id=job_id, angle=angle)
-                    else:
-                        front = Path(views["front"]["path"]).read_bytes()
-                        quality = self.usage.call("vision", self.analyzer.validate_view, front, output, angle, job_id=job_id, angle=angle)
-                    if not quality["accepted"]:
-                        path.unlink(missing_ok=True)
-                        views[angle] = {"status": "failed", "error": "Ảnh chưa đạt kiểm tra toàn thân, trang phục hoặc hướng quay. Có thể tạo lại riêng góc này.", "quality": quality}
-                        self._save_views(job_id, views)
-                        continue
-                    views[angle] = {"status": "completed", "path": str(path), "quality": quality}
-                except Exception as exc:
-                    logger.warning("Try-on %s angle %s failed (%s)", job_id, angle, type(exc).__name__)
-                    saved_candidate = views[angle].get("candidate_path")
-                    message = exc.detail if isinstance(exc, HTTPException) else "Chưa tạo được góc này. Có thể tạo lại riêng góc thiếu."
-                    views[angle] = {"status": "failed", "error": message}
-                    if saved_candidate:
-                        views[angle]["candidate_path"] = saved_candidate
-                self._save_views(job_id, views)
+
+            if views.get("front", {}).get("status") != "completed":
+                self._render_view(job_id, "front", views["front"], product, photo, garment, color, context, None, back_garment, publish)
+            other_angles = [a for a in angles if a != "front"]
+            if views.get("front", {}).get("status") == "completed" and other_angles:
+                front = Path(views["front"]["path"]).read_bytes()
+                futures = [self.view_pool.submit(self._render_view, job_id, angle, views[angle], product, photo,
+                    garment, color, context, front, back_garment, publish) for angle in other_angles
+                    if views[angle].get("status") != "completed"]
+                # Drain every worker even if persisting one angle fails, so a job
+                # cannot become deletable while another worker is still writing files.
+                wait(futures)
+                for future in futures:
+                    future.result()
+            elif other_angles:
+                for angle in other_angles:
+                    if views[angle].get("status") != "completed":
+                        publish(angle, {"status": "failed", "error": "Cần tạo được mặt trước trước khi tạo góc này."})
             self._save_views(job_id, views)
             count = sum(v.get("status") == "completed" for v in views.values())
+            target_count = len(angles)
             with self.db.connect() as conn:
                 conn.execute("UPDATE tryons SET status=?,error=?,duration_ms=? WHERE id=?",
-                             ("completed" if count == 4 else "partial" if count else "failed",
-                              None if count == 4 else "Một số góc chưa tạo được. Ảnh đã có vẫn được giữ lại.",
+                             ("completed" if count == target_count else "partial" if count else "failed",
+                              None if count == target_count else "Một số góc chưa tạo được. Ảnh đã có vẫn được giữ lại.",
                               int((time.perf_counter() - started) * 1000), job_id))
         except Exception as exc:
             # Never persist provider exception payloads: they may contain credentials or user images.
@@ -406,7 +440,8 @@ class TryOnService:
         if not views and row["result_path"]:  # Previous single-image sessions remain readable.
             views = {"front": {"status": "completed", "path": row["result_path"]}}
         data["views"] = []
-        for angle in ANGLES:
+        target_angles = [a for a in ANGLES if a in views] or list(self.settings.tryon_angles)
+        for angle in target_angles:
             v = views.get(angle, {"status": "unavailable"})
             if row["status"] in ("failed", "partial") and v["status"] in ("pending", "processing"):
                 v = {**v, "status": "failed", "error": "Góc này chưa hoàn tất. Có thể tạo lại góc thiếu."}

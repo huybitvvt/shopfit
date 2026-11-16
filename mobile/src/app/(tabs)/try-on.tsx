@@ -56,10 +56,12 @@ function FittingRoomContent() {
   const loadHistory = useCallback(async () => {
     if (!user) return;
     const list = await request<TryOn[]>('/api/tryons'); setHistory(list);
+    setError(null);
     setJob(current => current ? list.find(v => v.id === current.id) || current : list.find(v => v.status === 'queued' || v.status === 'processing') || null);
   }, [user]);
   useFocusEffect(useCallback(() => {
     let active = true;
+    setError(null);
     if (user) {
       void loadHistory().catch(e => { if (active) setError(e.message); });
       void request<{ profile: BodyProfile | null }>('/api/body-profile').then(data => { if (active) setProfile(data.profile); }).catch(e => { if (active) setError(e.message); });
@@ -76,7 +78,7 @@ function FittingRoomContent() {
         const next = await request<TryOn>(`/api/tryons/${jobId}`);
         if (!active) return;
         setJob(next);
-        if (!['queued', 'processing'].includes(next.status)) { await loadHistory(); notify(next.status === 'completed' ? 'Đã có đủ 4 góc thử đồ.' : 'Đã lưu các góc tạo được. Có thể tạo lại góc thiếu.'); }
+        if (!['queued', 'processing'].includes(next.status)) { await loadHistory(); notify(next.status === 'completed' ? 'Đã có ảnh thử đồ của bạn.' : 'Đã lưu ảnh tạo được.'); }
       } catch (e) { if (active) setError((e as Error).message); }
       finally { pending = false; }
     }, 2000);
@@ -162,6 +164,6 @@ function FittingRoomContent() {
       </View>
     </View>
     <SectionHeading title="Những lần ướm thử" caption="YOUR FITTING DIARY" />
-    {history.length ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 14 }}>{history.map(item => <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`Xem lần thử ${item.product_name || ''}`} disabled={locked} onPress={() => { setJob(item); setSelectedId(item.product_id); setColor(item.color); setSize(item.size || 'M'); setPhoto(null); setCheck(null); }} style={{ width: wide ? 170 : '47%', marginBottom: 12 }}><Image source={mediaUrl(item.result_url || item.photo_url)} contentFit="cover" style={{ width: '100%', aspectRatio: 0.8, backgroundColor: t.colors.sand, borderRadius: 10 }} /><Text style={[s.text, { fontSize: 12, marginTop: 8 }]}>{item.product_name}</Text><Text style={[s.muted, { fontSize: 10 }]}>Size {item.size || '—'} · {item.views.filter(v => v.status === 'completed').length}/4 góc · {dateLabel(item.created_at)}</Text></Pressable>)}</View> : <Text style={s.muted}>{user ? 'Những ảnh thử đầu tiên của bạn sẽ xuất hiện ở đây.' : 'Đăng nhập để có nhật ký thử đồ riêng.'}</Text>}
+    {history.length ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 14 }}>{history.map(item => <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`Xem lần thử ${item.product_name || ''}`} disabled={locked} onPress={() => { setError(null); setJob(item); setSelectedId(item.product_id); setColor(item.color); setSize(item.size || 'M'); setPhoto(null); setCheck(null); }} style={{ width: wide ? 170 : '47%', marginBottom: 12 }}><Image source={mediaUrl(item.result_url || item.photo_url)} contentFit="cover" style={{ width: '100%', aspectRatio: 0.8, backgroundColor: t.colors.sand, borderRadius: 10 }} /><Text style={[s.text, { fontSize: 12, marginTop: 8 }]}>{item.product_name}</Text><Text style={[s.muted, { fontSize: 10 }]}>Size {item.size || '—'} · {item.views.filter(v => v.status === 'completed').length}/4 góc · {dateLabel(item.created_at)}</Text></Pressable>)}</View> : <Text style={s.muted}>{user ? 'Những ảnh thử đầu tiên của bạn sẽ xuất hiện ở đây.' : 'Đăng nhập để có nhật ký thử đồ riêng.'}</Text>}
   </Screen>;
 }

@@ -57,6 +57,8 @@ class GoogleProvider(Provider):
         api_key: str | None = None,
         image_model: str = DEFAULT_IMAGE_MODEL,
         video_model: str = DEFAULT_VIDEO_MODEL,
+        image_size: str = "1K",
+        image_thinking_level: str | None = None,
     ) -> None:
         """Initialize Google provider.
 
@@ -64,6 +66,8 @@ class GoogleProvider(Provider):
             api_key: Google API key. If None, reads from GOOGLE_API_KEY env var.
             image_model: Image generation model to use.
             video_model: Video generation model to use.
+            image_size: Gemini output resolution (default 1K; 512 requires a supporting model).
+            image_thinking_level: Optional thinking level for supporting image models.
 
         Raises:
             ProviderAuthError: If no API key is provided or found.
@@ -71,6 +75,8 @@ class GoogleProvider(Provider):
         self._api_key = api_key or os.environ.get("GOOGLE_API_KEY")
         self._image_model = image_model
         self._video_model = video_model
+        self._image_size = image_size
+        self._image_thinking_level = image_thinking_level
         self._client: Any = None
 
     @property
@@ -254,9 +260,10 @@ class GoogleProvider(Provider):
                     temperature=1,
                     top_p=0.95,
                     response_modalities=["IMAGE"],
+                    thinking_config=types.ThinkingConfig(thinking_level=self._image_thinking_level) if self._image_thinking_level else None,
                     image_config=types.ImageConfig(
                         aspect_ratio=aspect_ratio,
-                        image_size="1K",
+                        image_size=self._image_size,
                     ),
                 ),
             )
@@ -347,9 +354,10 @@ class GoogleProvider(Provider):
                     temperature=1,
                     top_p=0.95,
                     response_modalities=["IMAGE"],
+                    thinking_config=types.ThinkingConfig(thinking_level=self._image_thinking_level) if self._image_thinking_level else None,
                     image_config=types.ImageConfig(
                         aspect_ratio=aspect_ratio,
-                        image_size="1K",
+                        image_size=self._image_size,
                     ),
                 ),
             )

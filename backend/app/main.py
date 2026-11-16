@@ -27,6 +27,7 @@ from .insights import insight_routes
 from .ai_usage import AIUsage
 from .storage import StorageManager
 from .legal import render_privacy_page, render_terms_page, render_delete_page
+from .mailer import send_otp_email
 
 
 class Login(BaseModel):
@@ -303,10 +304,13 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 VALUES (?, ?, ?, 0, ?)
                 ON CONFLICT(email) DO UPDATE SET otp_hash=excluded.otp_hash, expires_at=excluded.expires_at, attempts=0, created_at=excluded.created_at""",
                 (body.email, otp_h, expires_at, now()))
-        res = {"message": "Mã xác nhận OTP đã được gửi đến email của bạn. Mã có hiệu lực trong 15 phút."}
-        if settings.seed_demo:
-            res["debug_otp"] = otp
-        return res
+
+        # Send real OTP email
+        sent = send_otp_email(body.email, otp, settings)
+        if not sent and settings.smtp_host:
+            raise HTTPException(500, "Không thể gửi email lúc này. Vui lòng kiểm tra lại cấu hình email hoặc thử lại sau.")
+
+        return {"message": "Mã xác thực OTP đã được gửi đến email của bạn. Vui lòng kiểm tra hộp thư đến (hoặc hòm thư rác/spam)."}
 
     @app.post("/api/auth/reset-password")
     def reset_password(body: ResetPasswordRequest):

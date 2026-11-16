@@ -54,8 +54,7 @@ export default function Auth() {
           return;
         }
         const res = await forgotPassword(email.trim());
-        if (res.debug_otp) setOtp(res.debug_otp);
-        notify(res.debug_otp ? `Mã OTP thử nghiệm: ${res.debug_otp}` : 'Đã gửi mã xác nhận đến email.');
+        notify(res.message || 'Mã xác thực OTP đã được gửi đến email của bạn.');
         setMode('reset');
       } else if (mode === 'reset') {
         if (!otp.trim() || newPassword.length < 8) {

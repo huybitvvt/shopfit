@@ -38,6 +38,12 @@ class Settings:
     cloudfly_bucket: str = field(default_factory=lambda: os.getenv("CLOUDFLY_BUCKET_NAME", "shopfit").strip())
     cloudfly_region: str = field(default_factory=lambda: os.getenv("CLOUDFLY_REGION", "us-east-1").strip())
     cloudfly_public_url: str = field(default_factory=lambda: os.getenv("CLOUDFLY_PUBLIC_URL", "").strip())
+    smtp_host: str = field(default_factory=lambda: os.getenv("SMTP_HOST", "").strip())
+    smtp_port: int = field(default_factory=lambda: int(os.getenv("SMTP_PORT", "587")))
+    smtp_user: str = field(default_factory=lambda: os.getenv("SMTP_USER", "").strip())
+    smtp_password: str = field(default_factory=lambda: os.getenv("SMTP_PASSWORD", "").strip())
+    smtp_from: str = field(default_factory=lambda: os.getenv("SMTP_FROM", "").strip())
+    smtp_use_tls: bool = field(default_factory=lambda: os.getenv("SMTP_USE_TLS", "true").lower() == "true")
 
     def __post_init__(self):
         if self.image_size not in {"512", "1K"}:

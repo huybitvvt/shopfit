@@ -175,7 +175,11 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
         conn.execute("INSERT INTO sessions VALUES (?,?,?)", (token_hash(token), user["id"], int(time.time()) + 7 * 86400))
         return {"token": token, "user": {k: user[k] for k in ("id", "name", "email", "role")}}
 
-    @app.get("/api/health")
+    @app.api_route("/", methods=["GET", "HEAD"])
+    def root():
+        return {"name": "ShopFit API", "status": "running"}
+
+    @app.api_route("/api/health", methods=["GET", "HEAD"])
     def health():
         with db.connect() as conn:
             conn.execute("SELECT 1").fetchone()

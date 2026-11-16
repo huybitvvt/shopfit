@@ -133,6 +133,10 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     async def lifespan(app):
         try:
             db.initialize()
+            assets_dir = Path(__file__).resolve().parents[1] / "assets"
+            if assets_dir.is_dir():
+                for asset in assets_dir.glob("*.jpg"):
+                    storage.put_catalog(asset.name, asset.read_bytes())
             service.recover()
             yield
         finally:

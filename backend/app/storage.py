@@ -28,14 +28,22 @@ class StorageManager:
 
         self._s3 = None
         if self.enabled:
+            endpoint = settings.cloudfly_endpoint_url
+            if endpoint and not endpoint.startswith(("http://", "https://")):
+                endpoint = f"https://{endpoint}"
             try:
                 self._s3 = boto3.client(
                     "s3",
-                    endpoint_url=settings.cloudfly_endpoint_url,
+                    endpoint_url=endpoint,
                     aws_access_key_id=settings.cloudfly_access_key,
                     aws_secret_access_key=settings.cloudfly_secret_key,
                     region_name=settings.cloudfly_region or "us-east-1",
-                    config=Config(signature_version="s3v4"),
+                    config=Config(
+                        signature_version="s3v4",
+                        s3={"payload_signing_enabled": False, "addressing_style": "path"},
+                        request_checksum_calculation="when_required",
+                        response_checksum_validation="when_required",
+                    ),
                 )
                 logger.info("Cloudfly S3 storage initialized for bucket: %s", self.bucket)
             except Exception as e:

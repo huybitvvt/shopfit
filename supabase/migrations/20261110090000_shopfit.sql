@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS wardrobe (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL,
     category TEXT NOT NULL, material TEXT NOT NULL, measurements TEXT NOT NULL, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS password_resets (
+    email TEXT PRIMARY KEY, otp_hash TEXT NOT NULL, expires_at BIGINT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS fit_reviews (
     order_item_id INTEGER PRIMARY KEY REFERENCES order_items(id), user_id TEXT NOT NULL REFERENCES users(id),
     actual_fit TEXT NOT NULL, notes TEXT NOT NULL, updated_at TEXT NOT NULL

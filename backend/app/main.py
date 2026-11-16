@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
@@ -26,6 +26,7 @@ from .sizing import required_fields
 from .insights import insight_routes
 from .ai_usage import AIUsage
 from .storage import StorageManager
+from .legal import render_privacy_page, render_terms_page, render_delete_page
 
 
 class Login(BaseModel):
@@ -43,6 +44,32 @@ class Login(BaseModel):
 
 class Register(Login):
     name: str = Field(min_length=2, max_length=80)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value):
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+            raise ValueError("Email không hợp lệ")
+        return value
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    otp: str = Field(min_length=4, max_length=10)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value):
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+            raise ValueError("Email không hợp lệ")
+        return value
 
 
 class CartItem(BaseModel):
@@ -183,6 +210,18 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     def root():
         return {"name": "ShopFit API", "status": "running"}
 
+    @app.get("/privacy", response_class=HTMLResponse)
+    def privacy_policy():
+        return render_privacy_page()
+
+    @app.get("/terms", response_class=HTMLResponse)
+    def terms_of_service():
+        return render_terms_page()
+
+    @app.get("/delete-account", response_class=HTMLResponse)
+    def delete_account_info():
+        return render_delete_page()
+
     @app.api_route("/api/health", methods=["GET", "HEAD"])
     def health():
         with db.connect() as conn:
@@ -218,6 +257,79 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     def logout(user=Depends(current_user), authorization: Annotated[str, Header()] = ""):
         with db.connect() as conn:
             conn.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash(authorization[7:]),))
+
+    @app.delete("/api/auth/me")
+    def delete_account(user=Depends(current_user)):
+        uid = user["id"]
+        files_to_delete = []
+        with db.connect() as conn:
+            db.begin_write(conn)
+            rows = conn.execute("SELECT id, views FROM tryons WHERE user_id=?", (uid,)).fetchall()
+            for r in rows:
+                job_id = r["id"]
+                files_to_delete.append(f"{job_id}-photo.jpg")
+                files_to_delete.append(f"{job_id}-result.jpg")
+                files_to_delete.append(f"{job_id}-actual.jpg")
+                for a in ("front", "left", "back", "right"):
+                    files_to_delete.append(f"{job_id}-{a}.jpg")
+            conn.execute("DELETE FROM tryon_evaluations WHERE job_id IN (SELECT id FROM tryons WHERE user_id=?)", (uid,))
+            conn.execute("DELETE FROM retry_requests WHERE user_id=?", (uid,))
+            conn.execute("DELETE FROM tryons WHERE user_id=?", (uid,))
+            conn.execute("DELETE FROM photo_checks WHERE user_id=?", (uid,))
+            conn.execute("DELETE FROM body_profiles WHERE user_id=?", (uid,))
+            conn.execute("DELETE FROM wardrobe WHERE user_id=?", (uid,))
+            conn.execute("DELETE FROM fit_reviews WHERE user_id=?", (uid,))
+            conn.execute("UPDATE orders SET customer_name='Người dùng đã xóa', phone='', address='', note='' WHERE user_id=?", (uid,))
+            conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+            conn.execute("DELETE FROM users WHERE id=?", (uid,))
+
+        for fname in files_to_delete:
+            try:
+                storage.delete_private(fname)
+            except Exception:
+                pass
+        return {"message": "Tài khoản và toàn bộ dữ liệu cá nhân của bạn đã được xóa vĩnh viễn."}
+
+    @app.post("/api/auth/forgot-password")
+    def forgot_password(body: ForgotPasswordRequest):
+        with db.connect() as conn:
+            user = conn.execute("SELECT id, email FROM users WHERE email=?", (body.email,)).fetchone()
+            if not user:
+                return {"message": "Nếu email tồn tại trong hệ thống, mã xác nhận OTP đã được gửi đến bạn."}
+            otp = f"{secrets.randbelow(900000) + 100000}"
+            otp_h = token_hash(otp)
+            expires_at = int(time.time()) + 900
+            conn.execute("""INSERT INTO password_resets (email, otp_hash, expires_at, attempts, created_at)
+                VALUES (?, ?, ?, 0, ?)
+                ON CONFLICT(email) DO UPDATE SET otp_hash=excluded.otp_hash, expires_at=excluded.expires_at, attempts=0, created_at=excluded.created_at""",
+                (body.email, otp_h, expires_at, now()))
+        res = {"message": "Mã xác nhận OTP đã được gửi đến email của bạn. Mã có hiệu lực trong 15 phút."}
+        if settings.seed_demo:
+            res["debug_otp"] = otp
+        return res
+
+    @app.post("/api/auth/reset-password")
+    def reset_password(body: ResetPasswordRequest):
+        with db.connect() as conn:
+            db.begin_write(conn)
+            reset_row = conn.execute("SELECT * FROM password_resets WHERE email=?", (body.email,)).fetchone()
+            if not reset_row:
+                raise HTTPException(400, "Không tìm thấy yêu cầu đặt lại mật khẩu hoặc mã đã hết hạn.")
+            if int(time.time()) > reset_row["expires_at"]:
+                conn.execute("DELETE FROM password_resets WHERE email=?", (body.email,))
+                raise HTTPException(400, "Mã OTP đã hết hạn. Vui lòng yêu cầu mã mới.")
+            if reset_row["attempts"] >= 5:
+                conn.execute("DELETE FROM password_resets WHERE email=?", (body.email,))
+                raise HTTPException(429, "Bạn đã nhập sai mã quá 5 lần. Vui lòng yêu cầu mã mới.")
+            if not hmac.compare_digest(reset_row["otp_hash"], token_hash(body.otp.strip())):
+                conn.execute("UPDATE password_resets SET attempts = attempts + 1 WHERE email=?", (body.email,))
+                raise HTTPException(400, "Mã OTP không chính xác. Vui lòng kiểm tra lại.")
+            conn.execute("UPDATE users SET password_hash=? WHERE email=?", (hash_password(body.new_password), body.email))
+            conn.execute("DELETE FROM password_resets WHERE email=?", (body.email,))
+            user = conn.execute("SELECT id FROM users WHERE email=?", (body.email,)).fetchone()
+            if user:
+                conn.execute("DELETE FROM sessions WHERE user_id=?", (user["id"],))
+        return {"message": "Mật khẩu đã được đặt lại thành công. Vui lòng đăng nhập lại bằng mật khẩu mới."}
 
     @app.get("/api/products")
     def products():

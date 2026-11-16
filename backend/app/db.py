@@ -17,7 +17,7 @@ INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg.IntegrityError)
 TABLES = (
     "users", "sessions", "products", "variants", "orders", "order_items", "tryons",
     "body_profiles", "photo_checks", "tryon_evaluations", "wardrobe", "fit_reviews",
-    "ai_calls", "retry_requests",
+    "ai_calls", "retry_requests", "password_resets",
 )
 POSTGRES_SCHEMA = Path(__file__).resolve().parents[2] / "supabase" / "migrations" / "20261110090000_shopfit.sql"
 
@@ -200,6 +200,10 @@ class Database:
             CREATE TABLE IF NOT EXISTS retry_requests (
                 user_id TEXT NOT NULL REFERENCES users(id), request_key TEXT NOT NULL,
                 job_id TEXT NOT NULL REFERENCES tryons(id), PRIMARY KEY(user_id,request_key)
+            );
+            CREATE TABLE IF NOT EXISTS password_resets (
+                email TEXT PRIMARY KEY, otp_hash TEXT NOT NULL, expires_at INTEGER NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
             );
         """)
         return seed_charts

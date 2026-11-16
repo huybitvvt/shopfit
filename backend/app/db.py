@@ -205,6 +205,12 @@ class Database:
                 email TEXT PRIMARY KEY, otp_hash TEXT NOT NULL, expires_at INTEGER NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS reports (
+                id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id),
+                tryon_id TEXT REFERENCES tryons(id), reason TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at);
         """)
         return seed_charts
 

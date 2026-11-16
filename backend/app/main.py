@@ -73,6 +73,11 @@ class ResetPasswordRequest(BaseModel):
         return value
 
 
+class ReportRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=150)
+    details: str = Field(default="", max_length=1000)
+
+
 class CartItem(BaseModel):
     product_id: str
     size: str
@@ -278,6 +283,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             conn.execute("DELETE FROM tryons WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM photo_checks WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM body_profiles WHERE user_id=?", (uid,))
+            conn.execute("DELETE FROM reports WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM wardrobe WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM fit_reviews WHERE user_id=?", (uid,))
             conn.execute("UPDATE orders SET customer_name='Người dùng đã xóa', phone='', address='', note='' WHERE user_id=?", (uid,))
@@ -534,6 +540,22 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 Path(evaluation[0]).unlink(missing_ok=True)
             conn.execute("DELETE FROM tryon_evaluations WHERE job_id=?", (job_id,))
             conn.execute("UPDATE tryons SET deleted=1,photo_path='',result_path=NULL,image_secret='',usage=NULL,views='{}',body_snapshot=NULL,fit_snapshot=NULL,photo_check=NULL WHERE id=?", (job_id,))
+
+    @app.post("/api/tryons/{job_id}/report", status_code=201)
+    def report_tryon(job_id: str, body: ReportRequest, user=Depends(current_user)):
+        with db.connect() as conn:
+            row = conn.execute("SELECT id FROM tryons WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "Không tìm thấy lượt thử đồ cần báo cáo.")
+            report_id = uuid.uuid4().hex
+            conn.execute(
+                "INSERT INTO reports (id, user_id, tryon_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (report_id, user["id"], job_id, body.reason.strip(), body.details.strip(), now()),
+            )
+            return {
+                "message": "Cảm ơn bạn đã phản hồi. Ban quản trị ShopFit đã ghi nhận và sẽ xử lý kiểm duyệt trong vòng 24 giờ.",
+                "report_id": report_id,
+            }
 
     @app.get("/api/tryons/{job_id}/image/{kind}")
     def private_image(job_id: str, kind: Literal["photo", "result", "front", "left", "back", "right", "actual"], expires: int, signature: str):

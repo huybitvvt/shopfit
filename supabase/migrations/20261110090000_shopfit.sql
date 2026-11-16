@@ -75,6 +75,12 @@ CREATE TABLE IF NOT EXISTS retry_requests (
     user_id TEXT NOT NULL REFERENCES users(id), request_key TEXT NOT NULL,
     job_id TEXT NOT NULL REFERENCES tryons(id), PRIMARY KEY(user_id, request_key)
 );
+CREATE TABLE IF NOT EXISTS reports (
+    id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id),
+    tryon_id TEXT REFERENCES tryons(id), reason TEXT NOT NULL,
+    details TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at);
 
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
@@ -90,7 +96,8 @@ ALTER TABLE wardrobe ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fit_reviews ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_calls ENABLE ROW LEVEL SECURITY;
 ALTER TABLE retry_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reports ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON users, sessions, products, variants, orders, order_items, tryons,
-    body_profiles, photo_checks, tryon_evaluations, wardrobe, fit_reviews, ai_calls, retry_requests
+    body_profiles, photo_checks, tryon_evaluations, wardrobe, fit_reviews, ai_calls, retry_requests, reports
     FROM anon, authenticated;
 REVOKE ALL ON SEQUENCE order_items_id_seq FROM anon, authenticated;

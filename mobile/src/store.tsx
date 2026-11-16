@@ -17,6 +17,9 @@ type Store = {
   toast: string | null; notify: (message: string) => void;
   refresh: () => Promise<void>; login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>; logout: () => Promise<void>;
+  forgotPassword: (email: string) => Promise<{ message: string; debug_otp?: string }>;
+  resetPassword: (email: string, otp: string, newPassword: string) => Promise<{ message: string }>;
+  deleteAccount: () => Promise<void>;
   toggleFavorite: (id: string) => void; addCart: (p: Product, size: string, color: string) => void;
   updateCart: (key: string, quantity: number) => void; clearCart: () => void;
   changeServer: (url: string) => Promise<void>;
@@ -82,6 +85,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     try { await request('/api/auth/logout', { method: 'POST' }); } catch { /* Local sign-out still works offline. */ }
     await sessionStorage.remove(); setToken(null); setUser(null); setCart([]); notify('Đã đăng xuất.');
   }
+  async function deleteAccount() {
+    await request('/api/auth/me', { method: 'DELETE' });
+    await sessionStorage.remove(); setToken(null); setUser(null); setCart([]); setFavorites([]);
+    notify('Tài khoản và dữ liệu đã được xóa vĩnh viễn.');
+  }
+  async function forgotPassword(email: string) {
+    return request<{ message: string; debug_otp?: string }>('/api/auth/forgot-password', {
+      method: 'POST', body: JSON.stringify({ email }),
+    });
+  }
+  async function resetPassword(email: string, otp: string, newPassword: string) {
+    return request<{ message: string }>('/api/auth/reset-password', {
+      method: 'POST', body: JSON.stringify({ email, otp, new_password: newPassword }),
+    });
+  }
   async function changeServer(url: string) {
     await sessionStorage.remove(); setToken(null); setUser(null); setCart([]); setProducts([]); setHealth(null);
     await AsyncStorage.setItem('shopfit-server', url); setApiUrl(url); await refresh();
@@ -109,6 +127,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   return <Context.Provider value={{ products, loading, error, health, user, restoring, cart, favorites, toast, notify, refresh,
     login: (email, password) => authenticate('/api/auth/login', { email, password }),
     register: (name, email, password) => authenticate('/api/auth/register', { name, email, password }),
-    logout, changeServer, toggleFavorite, addCart, updateCart, clearCart: () => setCart([]) }}>{children}</Context.Provider>;
+    logout, deleteAccount, forgotPassword, resetPassword, changeServer, toggleFavorite, addCart, updateCart, clearCart: () => setCart([]) }}>{children}</Context.Provider>;
 }
 export function useStore() { const store = useContext(Context); if (!store) throw new Error('StoreProvider is missing'); return store; }

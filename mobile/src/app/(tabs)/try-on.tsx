@@ -7,6 +7,7 @@ import { ActivityIndicator, Pressable, ScrollView, Text, useWindowDimensions, Vi
 import { mediaUrl, photoForm, request } from '../../api';
 import { FourView } from '../../components/four-view';
 import { SizingAdvice } from '../../components/sizing';
+import { TopUpModal } from '../../components/top-up-modal';
 import { Button, CartButton, ErrorMessage, Header, Screen, SectionHeading, s } from '../../components/ui';
 import { useStore } from '../../store';
 import { finishRequestKey, pendingRequestKey } from '../../request-key';
@@ -25,6 +26,7 @@ function FittingRoomContent() {
   const { products, user, health, notify, quota, refreshQuota } = useStore();
   const scrollRef = useRef<ScrollView>(null);
   const submitting = useRef(false);
+  const [showTopUp, setShowTopUp] = useState(false);
   const [selectedId, setSelectedId] = useState(params.productId || '');
   const [colorChoice, setColor] = useState(params.color || '');
   const [sizeChoice, setSize] = useState(params.size || 'M');
@@ -103,6 +105,7 @@ function FittingRoomContent() {
   }
   async function generate() {
     if (!user) { router.push('/auth'); return; }
+    if (quota && quota.total_available <= 0) { setShowTopUp(true); return; }
     if (!photo || !product || !check?.accepted || !readyProfile || locked || submitting.current) return;
     submitting.current = true;
     setBusy(true); setError(null);
@@ -114,7 +117,13 @@ function FittingRoomContent() {
       await finishRequestKey(scope);
       void refreshQuota();
       await loadHistory();
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); submitting.current = false; }
+    } catch (e) {
+      const msg = (e as Error).message;
+      setError(msg);
+      if (msg.includes('lượt thử') || msg.includes('hạn mức')) {
+        setShowTopUp(true);
+      }
+    } finally { setBusy(false); submitting.current = false; }
   }
   async function retry() {
     if (!job || !user || submitting.current) return;
@@ -153,11 +162,26 @@ function FittingRoomContent() {
           {user ? `${quota?.vip_name || 'Hạng Đồng'} · Còn ${quota?.total_available ?? 3} lượt thử` : 'Đăng ký nhận ngay 3 lượt thử miễn phí'}
         </Text>
       </View>
-      {user && quota?.next_tier_name ? (
-        <Text style={{ fontSize: 11, color: t.colors.muted }}>
-          Mua sắm để lên {quota.next_tier_name}
-        </Text>
-      ) : null}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        {user && quota?.next_tier_name ? (
+          <Text style={{ fontSize: 11, color: t.colors.muted }}>
+            Mua sắm để lên {quota.next_tier_name}
+          </Text>
+        ) : null}
+        {user ? (
+          <Pressable
+            onPress={() => setShowTopUp(true)}
+            style={{
+              backgroundColor: t.colors.green,
+              paddingHorizontal: 9,
+              paddingVertical: 4,
+              borderRadius: 6,
+            }}
+          >
+            <Text style={{ color: '#FFFFFF', fontSize: 11, fontFamily: t.fonts.bold }}>Nạp thêm</Text>
+          </Pressable>
+        ) : null}
+      </View>
     </View>
     <View style={{ flexDirection: wide ? 'row' : 'column', gap: wide ? 40 : 24 }}>
       <View style={{ width: wide ? '43%' : '100%', maxWidth: 480, alignSelf: wide ? 'flex-start' : 'center' }}>
@@ -191,5 +215,6 @@ function FittingRoomContent() {
     </View>
     <SectionHeading title="Những lần ướm thử" caption="YOUR FITTING DIARY" />
     {history.length ? <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 14 }}>{history.map(item => <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`Xem lần thử ${item.product_name || ''}`} disabled={locked} onPress={() => { setError(null); setJob(item); setSelectedId(item.product_id); setColor(item.color); setSize(item.size || 'M'); setPhoto(null); setCheck(null); }} style={{ width: wide ? 170 : '47%', marginBottom: 12 }}><Image source={mediaUrl(item.result_url || item.photo_url)} contentFit="cover" style={{ width: '100%', aspectRatio: 0.8, backgroundColor: t.colors.sand, borderRadius: 10 }} /><Text style={[s.text, { fontSize: 12, marginTop: 8 }]}>{item.product_name}</Text><Text style={[s.muted, { fontSize: 10 }]}>Size {item.size || '—'} · {item.views.filter(v => v.status === 'completed').length}/4 góc · {dateLabel(item.created_at)}</Text></Pressable>)}</View> : <Text style={s.muted}>{user ? 'Những ảnh thử đầu tiên của bạn sẽ xuất hiện ở đây.' : 'Đăng nhập để có nhật ký thử đồ riêng.'}</Text>}
+    <TopUpModal visible={showTopUp} onClose={() => setShowTopUp(false)} />
   </Screen>;
 }

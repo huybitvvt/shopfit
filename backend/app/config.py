@@ -46,6 +46,9 @@ class Settings:
     smtp_use_tls: bool = field(default_factory=lambda: os.getenv("SMTP_USE_TLS", "true").lower() == "true")
     resend_api_key: str = field(default_factory=lambda: os.getenv("RESEND_API_KEY", "").strip())
     brevo_api_key: str = field(default_factory=lambda: os.getenv("BREVO_API_KEY", "").strip())
+    bank_id: str = field(default_factory=lambda: os.getenv("BANK_ID", "MB").strip())
+    bank_account: str = field(default_factory=lambda: os.getenv("BANK_ACCOUNT", "888899998888").strip())
+    bank_account_name: str = field(default_factory=lambda: os.getenv("BANK_ACCOUNT_NAME", "SHOPFIT STUDIO").strip())
 
     def __post_init__(self):
         if self.image_size not in {"512", "1K"}:

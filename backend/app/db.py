@@ -221,6 +221,24 @@ class Database:
                 details TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at);
+            CREATE TABLE IF NOT EXISTS token_packages (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, price INTEGER NOT NULL,
+                tryons INTEGER NOT NULL, tag TEXT, voucher_value INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS payment_transactions (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+                package_id TEXT NOT NULL REFERENCES token_packages(id), amount INTEGER NOT NULL,
+                tryons INTEGER NOT NULL, payment_code TEXT UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+                qr_url TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, completed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_trans_user ON payment_transactions(user_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_trans_code ON payment_transactions(payment_code);
+            CREATE TABLE IF NOT EXISTS user_vouchers (
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), code TEXT NOT NULL,
+                discount_amount INTEGER NOT NULL, min_order INTEGER NOT NULL DEFAULT 0,
+                used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+            );
         """)
         return seed_charts
 
@@ -256,7 +274,19 @@ class Database:
                 ("demo-admin", "ShopFit Studio", "shop@shopfit.local", self.settings.admin_password, "admin"),
             ]:
                 if not conn.execute("SELECT 1 FROM users WHERE id=?", (uid,)).fetchone():
-                    conn.execute("INSERT INTO users VALUES (?,?,?,?,?,?)", (uid, name, email, hash_password(password), role, now()))
+                    conn.execute("INSERT INTO users (id, name, email, password_hash, role, created_at) VALUES (?,?,?,?,?,?)", (uid, name, email, hash_password(password), role, now()))
+
+        packages = [
+            ('pack_10', 'Gói Thử Nhanh', 19000, 10, 'Tiết kiệm', 0),
+            ('pack_30', 'Gói Phổ Thông', 49000, 30, 'Phổ biến nhất ⭐', 30000),
+            ('pack_vip', 'Gói VIP Tháng', 99000, 100, 'VIP Đỉnh Cao 👑', 50000),
+        ]
+        for pid, name, price, tryons, tag, voucher in packages:
+            conn.execute('''
+                INSERT INTO token_packages (id, name, price, tryons, tag, voucher_value, active)
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+                ON CONFLICT(id) DO UPDATE SET name=excluded.name, price=excluded.price, tryons=excluded.tryons, tag=excluded.tag, voucher_value=excluded.voucher_value
+            ''', (pid, name, price, tryons, tag, voucher))
         # The service recovers durable queued jobs and pauses uncertain paid calls after startup.
 
     def product(self, conn, row):

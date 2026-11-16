@@ -4,6 +4,7 @@ import json
 import re
 import secrets
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -28,6 +29,7 @@ from .ai_usage import AIUsage
 from .storage import StorageManager
 from .legal import render_privacy_page, render_terms_page, render_delete_page
 from .mailer import send_otp_email
+from .notifier import send_push_notification
 
 
 class Login(BaseModel):
@@ -80,6 +82,10 @@ class ReportRequest(BaseModel):
 
 class PushTokenRequest(BaseModel):
     push_token: str = Field(min_length=10, max_length=200)
+
+
+class CreatePaymentOrder(BaseModel):
+    package_id: str = Field(min_length=2, max_length=50)
 
 
 class CartItem(BaseModel):
@@ -202,6 +208,48 @@ def calculate_tier(total_spent: int) -> str:
     return "bronze"
 
 
+def complete_payment_transaction(conn, trans_row, settings: Settings):
+    if trans_row["status"] == "completed":
+        return {"status": "completed", "tryons": trans_row["tryons"]}
+
+    trans_id = trans_row["id"]
+    user_id = trans_row["user_id"]
+    tryons = trans_row["tryons"]
+    amount = trans_row["amount"]
+    package_id = trans_row["package_id"]
+
+    conn.execute("UPDATE payment_transactions SET status='completed', completed_at=? WHERE id=?", (now(), trans_id))
+    conn.execute(
+        "UPDATE users SET starter_tryons_left = COALESCE(starter_tryons_left, 0) + ?, total_spent = COALESCE(total_spent, 0) + ? WHERE id=?",
+        (tryons, amount, user_id)
+    )
+
+    u_row = conn.execute("SELECT total_spent, push_token FROM users WHERE id=?", (user_id,)).fetchone()
+    if u_row:
+        new_spent = u_row["total_spent"] or 0
+        new_tier = calculate_tier(new_spent)
+        conn.execute("UPDATE users SET vip_tier=? WHERE id=?", (new_tier, user_id))
+
+        if u_row["push_token"]:
+            send_push_notification(
+                u_row["push_token"],
+                "Nạp lượt thử thành công! 🎉",
+                f"Tài khoản của bạn đã được cộng thêm {tryons} lượt thử đồ AI ShopFit. Bắt đầu phối đồ ngay nhé!",
+                {"type": "payment_completed", "transaction_id": trans_id}
+            )
+
+    pkg = conn.execute("SELECT voucher_value FROM token_packages WHERE id=?", (package_id,)).fetchone()
+    if pkg and pkg["voucher_value"] > 0:
+        v_code = f"FIT{secrets.choice('ABCDEFGHJKLMNPQRSTUVWXYZ')}{secrets.randbelow(9000)+1000}"
+        conn.execute(
+            """INSERT INTO user_vouchers (id, user_id, code, discount_amount, min_order, used, created_at, expires_at)
+               VALUES (?, ?, ?, ?, 100000, 0, ?, ?)""",
+            (uuid.uuid4().hex, user_id, v_code, pkg["voucher_value"], now(), "2099-12-31T23:59:59")
+        )
+
+    return {"status": "completed", "tryons": tryons}
+
+
 def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     settings = settings or Settings()
     db = Database(settings)
@@ -263,6 +311,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
         return user
 
     def issue_session(conn, user):
+        u_dict = dict(user)
         token = secrets.token_urlsafe(48)
         conn.execute("INSERT INTO sessions VALUES (?,?,?)", (token_hash(token), user["id"], int(time.time()) + 7 * 86400))
         return {
@@ -272,9 +321,9 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 "name": user["name"],
                 "email": user["email"],
                 "role": user["role"],
-                "vip_tier": user.get("vip_tier", "bronze"),
-                "starter_tryons_left": user.get("starter_tryons_left", 3) if user.get("starter_tryons_left") is not None else 3,
-                "total_spent": user.get("total_spent", 0) or 0,
+                "vip_tier": u_dict.get("vip_tier", "bronze") or "bronze",
+                "starter_tryons_left": u_dict.get("starter_tryons_left", 3) if u_dict.get("starter_tryons_left") is not None else 3,
+                "total_spent": u_dict.get("total_spent", 0) or 0,
             }
         }
 
@@ -374,6 +423,91 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 "next_tier_name": VIP_TIERS[tier_info["next_tier"]]["name"] if tier_info["next_tier"] else None,
                 "next_spent_needed": max(0, tier_info["next_spent"] - total_spent) if tier_info["next_spent"] else 0,
             }
+
+    @app.get("/api/payment/packages")
+    def list_payment_packages():
+        with db.connect() as conn:
+            rows = conn.execute("SELECT id, name, price, tryons, tag, voucher_value FROM token_packages WHERE active=1 ORDER BY price ASC").fetchall()
+            return [dict(r) for r in rows]
+
+    @app.post("/api/payment/create-order")
+    def create_payment_order(body: CreatePaymentOrder, user=Depends(current_user)):
+        with db.connect() as conn:
+            pkg = conn.execute("SELECT * FROM token_packages WHERE id=? AND active=1", (body.package_id,)).fetchone()
+            if not pkg:
+                raise HTTPException(404, "Gói thử đồ không tồn tại hoặc đã ngừng hoạt động.")
+
+            code_chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+            payment_code = "FIT" + "".join(secrets.choice(code_chars) for _ in range(6))
+            trans_id = uuid.uuid4().hex
+
+            encoded_name = urllib.parse.quote(settings.bank_account_name)
+            qr_url = f"https://img.vietqr.io/image/{settings.bank_id}-{settings.bank_account}-compact2.png?amount={pkg['price']}&addInfo={payment_code}&accountName={encoded_name}"
+
+            conn.execute("""
+                INSERT INTO payment_transactions (id, user_id, package_id, amount, tryons, payment_code, status, qr_url, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+            """, (trans_id, user["id"], pkg["id"], pkg["price"], pkg["tryons"], payment_code, qr_url, now()))
+
+            return {
+                "transaction_id": trans_id,
+                "package_id": pkg["id"],
+                "package_name": pkg["name"],
+                "amount": pkg["price"],
+                "tryons": pkg["tryons"],
+                "voucher_value": pkg["voucher_value"],
+                "payment_code": payment_code,
+                "bank_id": settings.bank_id,
+                "bank_account": settings.bank_account,
+                "bank_account_name": settings.bank_account_name,
+                "qr_url": qr_url,
+                "status": "pending",
+            }
+
+    @app.get("/api/payment/status/{transaction_id}")
+    def get_payment_status(transaction_id: str, user=Depends(current_user)):
+        with db.connect() as conn:
+            row = conn.execute("SELECT * FROM payment_transactions WHERE id=? AND user_id=?", (transaction_id, user["id"])).fetchone()
+            if not row:
+                raise HTTPException(404, "Không tìm thấy giao dịch nạp lượt.")
+            return {
+                "transaction_id": row["id"],
+                "status": row["status"],
+                "tryons": row["tryons"],
+                "amount": row["amount"],
+                "completed_at": row["completed_at"],
+            }
+
+    @app.post("/api/payment/confirm/{transaction_id}")
+    def confirm_payment(transaction_id: str, user=Depends(current_user)):
+        with db.connect() as conn:
+            db.begin_write(conn)
+            row = conn.execute("SELECT * FROM payment_transactions WHERE id=? AND user_id=?", (transaction_id, user["id"])).fetchone()
+            if not row:
+                raise HTTPException(404, "Không tìm thấy giao dịch.")
+            result = complete_payment_transaction(conn, row, settings)
+            return result
+
+    @app.post("/api/payment/webhook")
+    def payment_webhook(body: dict):
+        text = f"{body.get('content', '')} {body.get('description', '')} {body.get('code', '')}"
+        match = re.search(r"FIT[A-Z0-9]{6}", text.upper())
+        if not match:
+            return {"status": "ignored", "reason": "No matching payment code"}
+        code = match.group(0)
+        with db.connect() as conn:
+            db.begin_write(conn)
+            row = conn.execute("SELECT * FROM payment_transactions WHERE payment_code=? AND status='pending'", (code,)).fetchone()
+            if not row:
+                return {"status": "ignored", "reason": "Transaction not found or already completed"}
+            result = complete_payment_transaction(conn, row, settings)
+            return result
+
+    @app.get("/api/user/vouchers")
+    def get_user_vouchers(user=Depends(current_user)):
+        with db.connect() as conn:
+            rows = conn.execute("SELECT id, code, discount_amount, min_order, used, expires_at FROM user_vouchers WHERE user_id=? AND used=0 ORDER BY created_at DESC", (user["id"],)).fetchall()
+            return [dict(r) for r in rows]
 
     @app.post("/api/auth/logout", status_code=204)
     def logout(user=Depends(current_user), authorization: Annotated[str, Header()] = ""):

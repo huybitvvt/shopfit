@@ -83,6 +83,24 @@ CREATE TABLE IF NOT EXISTS reports (
     details TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at);
+CREATE TABLE IF NOT EXISTS token_packages (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, price INTEGER NOT NULL,
+    tryons INTEGER NOT NULL, tag TEXT, voucher_value INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS payment_transactions (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+    package_id TEXT NOT NULL REFERENCES token_packages(id), amount INTEGER NOT NULL,
+    tryons INTEGER NOT NULL, payment_code TEXT UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+    qr_url TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_trans_user ON payment_transactions(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_trans_code ON payment_transactions(payment_code);
+CREATE TABLE IF NOT EXISTS user_vouchers (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), code TEXT NOT NULL,
+    discount_amount INTEGER NOT NULL, min_order INTEGER NOT NULL DEFAULT 0,
+    used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+);
 
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
@@ -99,7 +117,11 @@ ALTER TABLE fit_reviews ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_calls ENABLE ROW LEVEL SECURITY;
 ALTER TABLE retry_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE token_packages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payment_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_vouchers ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON users, sessions, products, variants, orders, order_items, tryons,
-    body_profiles, photo_checks, tryon_evaluations, wardrobe, fit_reviews, ai_calls, retry_requests, reports
+    body_profiles, photo_checks, tryon_evaluations, wardrobe, fit_reviews, ai_calls, retry_requests, reports,
+    token_packages, payment_transactions, user_vouchers
     FROM anon, authenticated;
 REVOKE ALL ON SEQUENCE order_items_id_seq FROM anon, authenticated;

@@ -55,3 +55,40 @@ export type TryOn = { id: string; product_id: string; product_name?: string; col
 export type Evaluation = { identity_score: number; garment_score: number; fit_score: number; actual_fit: 'tight' | 'fits' | 'loose'; notes: string; actual_url: string; updated_at: string };
 export type Health = { status: string; ai_ready: boolean; engine: string; model: string; demo_accounts: boolean };
 export type PickedPhoto = { uri: string; mimeType?: string | null; fileName?: string | null; file?: File };
+export type TokenPackage = {
+  id: string;
+  name: string;
+  price: number;
+  tryons: number;
+  tag: string | null;
+  voucher_value: number;
+};
+export type PaymentOrder = {
+  transaction_id: string;
+  package_id: string;
+  package_name: string;
+  amount: number;
+  tryons: number;
+  voucher_value: number;
+  payment_code: string;
+  bank_id: string;
+  bank_account: string;
+  bank_account_name: string;
+  qr_url: string;
+  status: string;
+};
+export type PaymentStatus = {
+  transaction_id: string;
+  status: 'pending' | 'completed' | 'failed';
+  tryons: number;
+  amount: number;
+  completed_at: string | null;
+};
+export type UserVoucher = {
+  id: string;
+  code: string;
+  discount_amount: number;
+  min_order: number;
+  used: number;
+  expires_at: string;
+};

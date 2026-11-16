@@ -4,12 +4,14 @@ import { useState } from 'react';
 import { Alert, Linking, Platform, Pressable, Text, View } from 'react-native';
 import { API_URL } from '../../api';
 import { Button, CartButton, Header, Screen, s } from '../../components/ui';
+import { TopUpModal } from '../../components/top-up-modal';
 import { useStore } from '../../store';
 import { money, theme as t } from '../../theme';
 
 export default function Profile() {
   const { user, quota, logout, deleteAccount, favorites, cart } = useStore();
   const [deleting, setDeleting] = useState(false);
+  const [showTopUp, setShowTopUp] = useState(false);
 
   const links: { icon: React.ComponentProps<typeof Ionicons>['name']; title: string; subtitle: string; onPress: () => void }[] = [
     { icon: 'shirt-outline', title: 'Đồ tôi mặc vừa', subtitle: 'So sản phẩm shop với món đồ bạn đang mặc thoải mái', onPress: () => router.push(user ? '/wardrobe' : '/auth') },
@@ -147,6 +149,15 @@ export default function Profile() {
                 </Text>
               </View>
             )}
+
+            <Button
+              variant="outline"
+              icon="sparkles"
+              onPress={() => setShowTopUp(true)}
+              style={{ borderColor: t.colors.gold, borderWidth: 1 }}
+            >
+              Nạp thêm lượt thử đồ AI (VietQR)
+            </Button>
           </View>
         ) : (
           <View style={{
@@ -218,6 +229,7 @@ export default function Profile() {
           </Text>
         </View>
       </View>
+      <TopUpModal visible={showTopUp} onClose={() => setShowTopUp(false)} />
     </Screen>
   );
 }

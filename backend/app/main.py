@@ -5,6 +5,7 @@ import re
 import secrets
 import time
 import uuid
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
@@ -24,6 +25,7 @@ from .fitting_routes import fitting_routes
 from .sizing import required_fields
 from .insights import insight_routes
 from .ai_usage import AIUsage
+from .storage import StorageManager
 
 
 class Login(BaseModel):
@@ -122,9 +124,10 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     db = Database(settings)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     (settings.data_dir / "catalog").mkdir(exist_ok=True)
+    storage = StorageManager(settings)
     usage = AIUsage(db, settings)
     analyzer = analyzer or PhotoAnalyzer(db, settings, usage)
-    service = TryOnService(db, settings, engine, analyzer, usage)
+    service = TryOnService(db, settings, engine, analyzer, usage, storage=storage)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -138,10 +141,19 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
 
     app = FastAPI(title="ShopFit API", version="0.1.0", lifespan=lifespan)
     app.state.db = db
+    app.state.storage = storage
     app.state.tryon = service
     app.state.photo_analyzer = analyzer
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type", "X-Idempotency-Key"])
-    app.mount("/media", StaticFiles(directory=settings.data_dir / "catalog"), name="catalog")
+
+    @app.get("/media/{filename}")
+    def get_media(filename: str):
+        path = settings.data_dir / "catalog" / filename
+        if not path.is_file():
+            storage.get_catalog(filename)
+        if not path.is_file():
+            raise HTTPException(404, "Không tìm thấy file ảnh.")
+        return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
 
     def current_user(authorization: Annotated[str | None, Header()] = None):
         if not authorization or not authorization.startswith("Bearer "):
@@ -221,12 +233,16 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     async def upload(file: Annotated[UploadFile, File()], user=Depends(admin)):
         content = normalize_image(await file.read(MAX_UPLOAD + 1))
         filename = f"{uuid.uuid4().hex}.jpg"
-        (settings.data_dir / "catalog" / filename).write_bytes(content)
+        storage.put_catalog(filename, content)
         return {"url": f"/media/{filename}"}
 
     @app.post("/api/admin/products", status_code=201)
     def add_product(body: ProductWrite, user=Depends(admin)):
-        if not (settings.data_dir / "catalog" / body.image_url.rsplit("/", 1)[-1]).is_file():
+        fname = body.image_url.rsplit("/", 1)[-1]
+        if not (settings.data_dir / "catalog" / fname).is_file():
+            storage.get_catalog(fname)
+        if not (settings.data_dir / "catalog" / fname).is_file():
+            raise HTTPException(400, "Ảnh sản phẩm không tồn tại.")
             raise HTTPException(400, "Ảnh sản phẩm không tồn tại.")
         pid = uuid.uuid4().hex
         with db.connect() as conn:
@@ -410,7 +426,11 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             path = json.loads(row["views"]).get(kind, {}).get("path")
             if kind == "front" and not path:
                 path = row["result_path"]
-        if not path:
+        if not path or not Path(path).is_file():
+            fname = Path(path).name if path else f"{job_id}-{kind}.jpg"
+            storage.get_private(fname)
+            path = str(settings.data_dir / "private" / fname)
+        if not Path(path).is_file():
             raise HTTPException(404, "Ảnh chưa sẵn sàng.")
         return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=300"})
 

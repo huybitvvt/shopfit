@@ -21,6 +21,7 @@ from .db import Database, now
 from .sizing import advise
 from .ai_usage import AIUsage
 from .gemini import GeminiClients
+from .storage import StorageManager
 
 ANGLES = ("front", "left", "back", "right")
 
@@ -121,9 +122,10 @@ class OpenVTOEngine:
 
 
 class TryOnService:
-    def __init__(self, db: Database, settings: Settings, engine=None, analyzer=None, usage=None):
+    def __init__(self, db: Database, settings: Settings, engine=None, analyzer=None, usage=None, storage=None):
         self.db = db
         self.settings = settings
+        self.storage = storage or StorageManager(settings)
         self.engine = engine or OpenVTOEngine(settings)
         self.analyzer = analyzer
         self.usage = usage or AIUsage(db, settings)
@@ -244,6 +246,7 @@ class TryOnService:
                 if conn.execute("SELECT count(*) FROM tryons WHERE status IN ('queued','processing')").fetchone()[0] >= 24:
                     raise HTTPException(429, "Phòng thử đang đông. Vui lòng thử lại sau ít phút.")
                 path.write_bytes(photo)
+                self.storage.put_private(f"{job_id}-photo.jpg", photo)
                 fit = {"advice": advise(product, profile, color), "selected_size": size,
                        "garment": next((r for r in product["size_chart"]["rows"] if r["size"] == size), None),
                        "chart_verified": product["size_chart"]["verified"], "product": product}
@@ -293,6 +296,10 @@ class TryOnService:
             path = (self.settings.data_dir / "catalog" / filename).resolve()
             if path.parent != (self.settings.data_dir / "catalog").resolve():
                 raise ValueError("Invalid catalog path")
+            if not path.is_file():
+                self.storage.get_catalog(filename)
+            if not path.is_file():
+                raise ValueError("Catalog image not found")
             return normalize_image(path.read_bytes())
         parsed = urlparse(url)
         if parsed.scheme != "https" or parsed.hostname != "images.unsplash.com":
@@ -326,6 +333,7 @@ class TryOnService:
             temp_path = path.with_suffix(".tmp")
             temp_path.write_bytes(output)
             temp_path.replace(path)
+            self.storage.put_private(f"{job_id}-{angle}.jpg", output)
             view = {"status": "validating", "candidate_path": str(path)}
             publish(angle, view)
             if angle == "front":

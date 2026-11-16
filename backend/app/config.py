@@ -32,6 +32,12 @@ class Settings:
     image_estimate_usd: float = field(default_factory=lambda: float(os.getenv("AI_IMAGE_ESTIMATE_USD", "0.10")))
     vision_estimate_usd: float = field(default_factory=lambda: float(os.getenv("AI_VISION_ESTIMATE_USD", "0.002")))
     cors_origins: list[str] = field(default_factory=lambda: os.getenv("CORS_ORIGINS", "http://localhost:8081,http://localhost:8082").split(","))
+    cloudfly_endpoint_url: str = field(default_factory=lambda: os.getenv("CLOUDFLY_ENDPOINT_URL", "").strip())
+    cloudfly_access_key: str = field(default_factory=lambda: os.getenv("CLOUDFLY_ACCESS_KEY", "").strip())
+    cloudfly_secret_key: str = field(default_factory=lambda: os.getenv("CLOUDFLY_SECRET_KEY", "").strip())
+    cloudfly_bucket: str = field(default_factory=lambda: os.getenv("CLOUDFLY_BUCKET_NAME", "shopfit").strip())
+    cloudfly_region: str = field(default_factory=lambda: os.getenv("CLOUDFLY_REGION", "us-east-1").strip())
+    cloudfly_public_url: str = field(default_factory=lambda: os.getenv("CLOUDFLY_PUBLIC_URL", "").strip())
 
     def __post_init__(self):
         if self.image_size not in {"512", "1K"}:

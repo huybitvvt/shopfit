@@ -153,6 +153,16 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at);
         """)
         # Additive migrations keep existing accounts, orders and generated photographs.
+        user_columns = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
+        for name, declaration in {
+            "vip_tier": "TEXT NOT NULL DEFAULT 'bronze'",
+            "starter_tryons_left": "INTEGER NOT NULL DEFAULT 3",
+            "total_spent": "INTEGER NOT NULL DEFAULT 0",
+            "push_token": "TEXT",
+        }.items():
+            if name not in user_columns:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {name} {declaration}")
+
         product_columns = {r[1] for r in conn.execute("PRAGMA table_info(products)")}
         seed_charts = "size_chart" not in product_columns
         if seed_charts:

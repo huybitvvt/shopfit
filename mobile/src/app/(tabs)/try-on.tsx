@@ -1,3 +1,4 @@
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -21,7 +22,7 @@ export default function FittingRoom() {
 
 function FittingRoomContent() {
   const params = useLocalSearchParams<{ productId?: string; color?: string; size?: string }>();
-  const { products, user, health, notify } = useStore();
+  const { products, user, health, notify, quota, refreshQuota } = useStore();
   const scrollRef = useRef<ScrollView>(null);
   const submitting = useRef(false);
   const [selectedId, setSelectedId] = useState(params.productId || '');
@@ -111,6 +112,7 @@ function FittingRoomContent() {
       const key = await pendingRequestKey(scope, JSON.stringify([photo.uri, product.id, color, size]));
       setJob(await request<TryOn>('/api/tryons', { method: 'POST', body: form, headers: { 'X-Idempotency-Key': key } }, 60000));
       await finishRequestKey(scope);
+      void refreshQuota();
       await loadHistory();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); submitting.current = false; }
   }
@@ -133,6 +135,30 @@ function FittingRoomContent() {
   }
 
   return <Screen scrollRef={scrollRef}><Header title="Phòng thử của bạn" subtitle="FOUR VIEWS · YOUR FIT" right={<CartButton />} />
+    <View style={{
+      backgroundColor: '#F3F6F4',
+      borderWidth: 1,
+      borderColor: '#D4DDD7',
+      borderRadius: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      marginBottom: 20,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Ionicons name="sparkles" size={16} color={t.colors.green} />
+        <Text style={{ fontSize: 13, fontFamily: t.fonts.medium, color: t.colors.ink }}>
+          {user ? `${quota?.vip_name || 'Hạng Đồng'} · Còn ${quota?.total_available ?? 3} lượt thử` : 'Đăng ký nhận ngay 3 lượt thử miễn phí'}
+        </Text>
+      </View>
+      {user && quota?.next_tier_name ? (
+        <Text style={{ fontSize: 11, color: t.colors.muted }}>
+          Mua sắm để lên {quota.next_tier_name}
+        </Text>
+      ) : null}
+    </View>
     <View style={{ flexDirection: wide ? 'row' : 'column', gap: wide ? 40 : 24 }}>
       <View style={{ width: wide ? '43%' : '100%', maxWidth: 480, alignSelf: wide ? 'flex-start' : 'center' }}>
         {job ? <><FourView key={job.id} job={job} /><Text style={[s.label, { marginTop: 16 }]}>{job.product_name || products.find(p => p.id === job.product_id)?.name} · {job.color} · Size {job.size || 'chưa lưu'}</Text>

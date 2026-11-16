@@ -3,7 +3,8 @@ import * as SecureStore from 'expo-secure-store';
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { ApiError, request, setApiUrl, setToken } from './api';
-import type { CartLine, Health, Product, User } from './types';
+import { registerForPushNotificationsAsync } from './notifications';
+import type { CartLine, Health, Product, User, UserQuota } from './types';
 
 type Session = { token: string; user: User };
 const sessionStorage = {
@@ -14,6 +15,7 @@ const sessionStorage = {
 type Store = {
   products: Product[]; loading: boolean; error: string | null; health: Health | null;
   user: User | null; restoring: boolean; cart: CartLine[]; favorites: string[];
+  quota: UserQuota | null; refreshQuota: () => Promise<void>;
   toast: string | null; notify: (message: string) => void;
   refresh: () => Promise<void>; login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>; logout: () => Promise<void>;
@@ -35,9 +37,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [restoring, setRestoring] = useState(true);
   const [cart, setCart] = useState<CartLine[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [quota, setQuota] = useState<UserQuota | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const refreshQuota = useCallback(async () => {
+    try {
+      const q = await request<UserQuota>('/api/user/quota');
+      setQuota(q);
+    } catch {
+      // Offline or unauthenticated
+    }
+  }, []);
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -76,6 +88,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => { if (hydrated) void AsyncStorage.setItem('shopfit-cart', JSON.stringify(cart)); }, [cart, hydrated]);
   useEffect(() => { if (hydrated) void AsyncStorage.setItem('shopfit-favorites', JSON.stringify(favorites)); }, [favorites, hydrated]);
 
+  useEffect(() => {
+    let isMounted = true;
+    if (!user) return;
+    void request<UserQuota>('/api/user/quota')
+      .then(q => { if (isMounted) setQuota(q); })
+      .catch(() => {});
+    void (async () => {
+      try {
+        const pushToken = await registerForPushNotificationsAsync();
+        if (pushToken && isMounted) {
+          await request('/api/auth/push-token', {
+            method: 'PUT',
+            body: JSON.stringify({ push_token: pushToken }),
+          });
+        }
+      } catch {
+        // Ignore push notification errors on web/emulators
+      }
+    })();
+    return () => { isMounted = false; };
+  }, [user]);
+
   async function authenticate(path: string, body: object) {
     const session = await request<Session>(path, { method: 'POST', body: JSON.stringify(body) });
     await sessionStorage.set(JSON.stringify(session));
@@ -83,11 +117,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }
   async function logout() {
     try { await request('/api/auth/logout', { method: 'POST' }); } catch { /* Local sign-out still works offline. */ }
-    await sessionStorage.remove(); setToken(null); setUser(null); setCart([]); notify('Đã đăng xuất.');
+    await sessionStorage.remove(); setToken(null); setUser(null); setQuota(null); setCart([]); notify('Đã đăng xuất.');
   }
   async function deleteAccount() {
     await request('/api/auth/me', { method: 'DELETE' });
-    await sessionStorage.remove(); setToken(null); setUser(null); setCart([]); setFavorites([]);
+    await sessionStorage.remove(); setToken(null); setUser(null); setQuota(null); setCart([]); setFavorites([]);
     notify('Tài khoản và dữ liệu đã được xóa vĩnh viễn.');
   }
   async function forgotPassword(email: string) {
@@ -124,7 +158,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       return { ...i, product, quantity: Math.min(quantity, stock, 20) };
     }).filter(i => i.quantity > 0));
   }
-  return <Context.Provider value={{ products, loading, error, health, user, restoring, cart, favorites, toast, notify, refresh,
+  return <Context.Provider value={{ products, loading, error, health, user, restoring, cart, favorites, quota, refreshQuota, toast, notify, refresh,
     login: (email, password) => authenticate('/api/auth/login', { email, password }),
     register: (name, email, password) => authenticate('/api/auth/register', { name, email, password }),
     logout, deleteAccount, forgotPassword, resetPassword, changeServer, toggleFavorite, addCart, updateCart, clearCart: () => setCart([]) }}>{children}</Context.Provider>;

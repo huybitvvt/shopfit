@@ -78,6 +78,10 @@ class ReportRequest(BaseModel):
     details: str = Field(default="", max_length=1000)
 
 
+class PushTokenRequest(BaseModel):
+    push_token: str = Field(min_length=10, max_length=200)
+
+
 class CartItem(BaseModel):
     product_id: str
     size: str
@@ -152,6 +156,52 @@ class StatusPatch(BaseModel):
     status: Literal["confirmed", "shipping", "completed", "cancelled"]
 
 
+VIP_TIERS = {
+    "bronze": {
+        "name": "Hạng Đồng",
+        "daily_limit": 1,
+        "discount_percent": 0,
+        "min_spent": 0,
+        "next_tier": "silver",
+        "next_spent": 1_000_000,
+    },
+    "silver": {
+        "name": "Hạng Bạc",
+        "daily_limit": 3,
+        "discount_percent": 5,
+        "min_spent": 1_000_000,
+        "next_tier": "gold",
+        "next_spent": 3_000_000,
+    },
+    "gold": {
+        "name": "Hạng Vàng",
+        "daily_limit": 6,
+        "discount_percent": 10,
+        "min_spent": 3_000_000,
+        "next_tier": "diamond",
+        "next_spent": 5_000_000,
+    },
+    "diamond": {
+        "name": "Hạng Kim Cương",
+        "daily_limit": 20,
+        "discount_percent": 15,
+        "min_spent": 5_000_000,
+        "next_tier": None,
+        "next_spent": None,
+    },
+}
+
+
+def calculate_tier(total_spent: int) -> str:
+    if total_spent >= 5_000_000:
+        return "diamond"
+    if total_spent >= 3_000_000:
+        return "gold"
+    if total_spent >= 1_000_000:
+        return "silver"
+    return "bronze"
+
+
 def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     settings = settings or Settings()
     db = Database(settings)
@@ -196,8 +246,13 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(401, "Vui lòng đăng nhập để tiếp tục.")
         with db.connect() as conn:
-            row = conn.execute("""SELECT u.id,u.name,u.email,u.role FROM users u JOIN sessions s ON s.user_id=u.id
-                WHERE s.token_hash=? AND s.expires_at>?""", (token_hash(authorization[7:]), int(time.time()))).fetchone()
+            row = conn.execute("""SELECT u.id,u.name,u.email,u.role,
+                                         COALESCE(u.vip_tier, 'bronze') as vip_tier,
+                                         COALESCE(u.starter_tryons_left, 3) as starter_tryons_left,
+                                         COALESCE(u.total_spent, 0) as total_spent,
+                                         u.push_token
+                                  FROM users u JOIN sessions s ON s.user_id=u.id
+                                  WHERE s.token_hash=? AND s.expires_at>?""", (token_hash(authorization[7:]), int(time.time()))).fetchone()
         if not row:
             raise HTTPException(401, "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.")
         return dict(row)
@@ -210,7 +265,18 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     def issue_session(conn, user):
         token = secrets.token_urlsafe(48)
         conn.execute("INSERT INTO sessions VALUES (?,?,?)", (token_hash(token), user["id"], int(time.time()) + 7 * 86400))
-        return {"token": token, "user": {k: user[k] for k in ("id", "name", "email", "role")}}
+        return {
+            "token": token,
+            "user": {
+                "id": user["id"],
+                "name": user["name"],
+                "email": user["email"],
+                "role": user["role"],
+                "vip_tier": user.get("vip_tier", "bronze"),
+                "starter_tryons_left": user.get("starter_tryons_left", 3) if user.get("starter_tryons_left") is not None else 3,
+                "total_spent": user.get("total_spent", 0) or 0,
+            }
+        }
 
     @app.api_route("/", methods=["GET", "HEAD"])
     def root():
@@ -240,9 +306,20 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
         with db.connect() as conn:
             if conn.execute("SELECT 1 FROM users WHERE email=?", (body.email,)).fetchone():
                 raise HTTPException(409, "Email này đã được đăng ký.")
-            user = {"id": uuid.uuid4().hex, "name": body.name.strip(), "email": body.email, "role": "customer"}
+            user = {
+                "id": uuid.uuid4().hex,
+                "name": body.name.strip(),
+                "email": body.email,
+                "role": "customer",
+                "vip_tier": "bronze",
+                "starter_tryons_left": 3,
+                "total_spent": 0,
+            }
             try:
-                conn.execute("INSERT INTO users VALUES (?,?,?,?,?,?)", (user["id"], user["name"], user["email"], hash_password(body.password), "customer", now()))
+                conn.execute(
+                    "INSERT INTO users (id, name, email, password_hash, role, vip_tier, starter_tryons_left, total_spent, push_token, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (user["id"], user["name"], user["email"], hash_password(body.password), "customer", "bronze", 3, 0, None, now())
+                )
             except INTEGRITY_ERRORS:
                 raise HTTPException(409, "Email này đã được đăng ký.")
             return issue_session(conn, user)
@@ -258,6 +335,45 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     @app.get("/api/auth/me")
     def me(user=Depends(current_user)):
         return user
+
+    @app.put("/api/auth/push-token")
+    def update_push_token(body: PushTokenRequest, user=Depends(current_user)):
+        with db.connect() as conn:
+            conn.execute("UPDATE users SET push_token=? WHERE id=?", (body.push_token.strip(), user["id"]))
+        return {"status": "ok"}
+
+    @app.get("/api/user/quota")
+    def user_quota(user=Depends(current_user)):
+        with db.connect() as conn:
+            user_row = conn.execute("SELECT vip_tier, starter_tryons_left, total_spent FROM users WHERE id=?", (user["id"],)).fetchone()
+            tier = user_row["vip_tier"] if user_row and user_row["vip_tier"] else "bronze"
+            starter_left = user_row["starter_tryons_left"] if user_row and user_row["starter_tryons_left"] is not None else 3
+            total_spent = user_row["total_spent"] or 0
+            tier_info = VIP_TIERS.get(tier, VIP_TIERS["bronze"])
+
+            today_prefix = now()[:10]
+            used_today = conn.execute(
+                "SELECT count(*) FROM tryons WHERE user_id=? AND created_at LIKE ? AND deleted=0 AND status != 'failed'",
+                (user["id"], f"{today_prefix}%")
+            ).fetchone()[0]
+
+            daily_remaining = max(0, tier_info["daily_limit"] - used_today)
+            total_available = starter_left + daily_remaining
+
+            return {
+                "vip_tier": tier,
+                "vip_name": tier_info["name"],
+                "starter_tryons_left": starter_left,
+                "daily_limit": tier_info["daily_limit"],
+                "daily_used": used_today,
+                "daily_remaining": daily_remaining,
+                "total_available": total_available,
+                "total_spent": total_spent,
+                "discount_percent": tier_info["discount_percent"],
+                "next_tier": tier_info["next_tier"],
+                "next_tier_name": VIP_TIERS[tier_info["next_tier"]]["name"] if tier_info["next_tier"] else None,
+                "next_spent_needed": max(0, tier_info["next_spent"] - total_spent) if tier_info["next_spent"] else 0,
+            }
 
     @app.post("/api/auth/logout", status_code=204)
     def logout(user=Depends(current_user), authorization: Annotated[str, Header()] = ""):
@@ -437,6 +553,10 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             for item, p in lines:
                 conn.execute("""INSERT INTO order_items (order_id,product_id,name,image_url,size,color,quantity,price)
                     VALUES (?,?,?,?,?,?,?,?)""", (oid, p["id"], p["name"], p["image_url"], item.size, item.color, item.quantity, p["price"]))
+            conn.execute("UPDATE users SET total_spent = COALESCE(total_spent, 0) + ? WHERE id=?", (total, user["id"]))
+            new_spent_row = conn.execute("SELECT total_spent FROM users WHERE id=?", (user["id"],)).fetchone()
+            new_spent = new_spent_row[0] if new_spent_row and new_spent_row[0] else 0
+            conn.execute("UPDATE users SET vip_tier=? WHERE id=?", (calculate_tier(new_spent), user["id"]))
             return serialize_order(conn, conn.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone())
 
     @app.get("/api/orders")
@@ -493,10 +613,37 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
         profile = json.loads(profile_row[0]) if profile_row else None
         if not profile or any(profile.get(k) is None for k in required_fields(p["tryon_category"])):
             raise HTTPException(400, "Hãy lưu hồ sơ cơ thể và bổ sung số đo ngực/eo/mông cần thiết trước khi tạo ảnh.")
+
+        # Check quota & VIP tiers
+        with db.connect() as conn:
+            u_row = conn.execute("SELECT vip_tier, starter_tryons_left, total_spent FROM users WHERE id=?", (user["id"],)).fetchone()
+            tier = u_row["vip_tier"] if u_row and u_row["vip_tier"] else "bronze"
+            starter_left = u_row["starter_tryons_left"] if u_row and u_row["starter_tryons_left"] is not None else 3
+            tier_info = VIP_TIERS.get(tier, VIP_TIERS["bronze"])
+
+            today_prefix = now()[:10]
+            used_today = conn.execute(
+                "SELECT count(*) FROM tryons WHERE user_id=? AND created_at LIKE ? AND deleted=0 AND status != 'failed'",
+                (user["id"], f"{today_prefix}%")
+            ).fetchone()[0]
+
+            use_starter = False
+            if starter_left > 0:
+                use_starter = True
+            elif used_today >= tier_info["daily_limit"]:
+                next_tier_msg = f"Tích lũy mua sắm để lên {VIP_TIERS[tier_info['next_tier']]['name']} nhận thêm lượt hoặc quay lại vào ngày mai nhé!" if tier_info["next_tier"] else "Vui lòng quay lại vào ngày mai nhé!"
+                raise HTTPException(
+                    429,
+                    f"Bạn đã sử dụng hết hạn mức thử đồ hôm nay ({used_today}/{tier_info['daily_limit']} lượt). {next_tier_msg}"
+                )
+
         check = await run_in_threadpool(analyzer.check, user["id"], photo_bytes)
         if not check["accepted"]:
             raise HTTPException(400, "Ảnh chưa đạt: " + " ".join(check["messages"]))
         job_id = service.start(user["id"], p, color, photo_bytes, size, profile, check, request_key)
+        if use_starter:
+            with db.connect() as conn:
+                conn.execute("UPDATE users SET starter_tryons_left = CASE WHEN starter_tryons_left > 0 THEN starter_tryons_left - 1 ELSE 0 END WHERE id=?", (user["id"],))
         with db.connect() as conn:
             return service.serialize(conn.execute("SELECT * FROM tryons WHERE id=?", (job_id,)).fetchone())
 

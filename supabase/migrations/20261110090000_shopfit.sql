@@ -2,7 +2,9 @@
 -- Idempotent so a fresh backend/test schema can also bootstrap from this migration.
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'customer', created_at TEXT NOT NULL
+    password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'customer',
+    vip_tier TEXT NOT NULL DEFAULT 'bronze', starter_tryons_left INTEGER NOT NULL DEFAULT 3,
+    total_spent BIGINT NOT NULL DEFAULT 0, push_token TEXT, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires_at BIGINT NOT NULL

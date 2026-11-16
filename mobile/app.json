@@ -13,6 +13,7 @@
     },
     "android": {
       "package": "vn.shopfit.studio",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#344E40",
         "foregroundImage": "./assets/shopfit-icon.png"
@@ -35,6 +36,13 @@
           "photosPermission": "ShopFit cần chọn ảnh để bạn thử trang phục.",
           "cameraPermission": "ShopFit cần camera để chụp ảnh thử trang phục.",
           "microphonePermission": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/shopfit-icon.png",
+          "color": "#344E40"
         }
       ],
       "expo-build-properties"

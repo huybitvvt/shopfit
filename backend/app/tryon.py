@@ -400,11 +400,28 @@ class TryOnService:
             self._save_views(job_id, views)
             count = sum(v.get("status") == "completed" for v in views.values())
             target_count = len(angles)
+            final_status = "completed" if count == target_count else "partial" if count else "failed"
             with self.db.connect() as conn:
                 conn.execute("UPDATE tryons SET status=?,error=?,duration_ms=? WHERE id=?",
-                             ("completed" if count == target_count else "partial" if count else "failed",
+                             (final_status,
                               None if count == target_count else "Một số góc chưa tạo được. Ảnh đã có vẫn được giữ lại.",
                               int((time.perf_counter() - started) * 1000), job_id))
+
+            if final_status in ("completed", "partial"):
+                try:
+                    with self.db.connect() as conn:
+                        u = conn.execute("SELECT u.push_token, p.name as product_name FROM tryons t JOIN users u ON t.user_id=u.id JOIN products p ON t.product_id=p.id WHERE t.id=?", (job_id,)).fetchone()
+                        if u and u["push_token"]:
+                            from .notifier import send_push_notification
+                            prod_name = u["product_name"] or "sản phẩm"
+                            send_push_notification(
+                                u["push_token"],
+                                "ShopFit Studio ✨",
+                                f"Ảnh thử đồ {prod_name} của bạn đã hoàn tất! Bấm vào ngắm ngay nhé.",
+                                {"jobId": job_id, "screen": "/try-on"},
+                            )
+                except Exception as push_err:
+                    logger.warning("Failed to dispatch push notification: %s", push_err)
         except Exception as exc:
             # Never persist provider exception payloads: they may contain credentials or user images.
             logger.warning("Try-on %s failed (%s)", job_id, type(exc).__name__)

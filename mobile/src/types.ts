@@ -1,4 +1,27 @@
-export type User = { id: string; name: string; email: string; role: 'customer' | 'admin' };
+export type VipTier = 'bronze' | 'silver' | 'gold' | 'diamond';
+export type User = {
+  id: string;
+  name: string;
+  email: string;
+  role: 'customer' | 'admin';
+  vip_tier?: VipTier;
+  starter_tryons_left?: number;
+  total_spent?: number;
+};
+export type UserQuota = {
+  vip_tier: VipTier;
+  vip_name: string;
+  starter_tryons_left: number;
+  daily_limit: number;
+  daily_used: number;
+  daily_remaining: number;
+  total_available: number;
+  total_spent: number;
+  discount_percent: number;
+  next_tier: VipTier | null;
+  next_tier_name: string | null;
+  next_spent_needed: number;
+};
 export type Color = { name: string; hex: string };
 export type Variant = { size: string; color: string; stock: number };
 export type Product = {

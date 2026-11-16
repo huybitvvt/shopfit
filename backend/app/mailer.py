@@ -3,23 +3,20 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import httpx
+
 from .config import Settings
 
 logger = logging.getLogger("shopfit.mailer")
 
 
 def send_otp_email(to_email: str, otp: str, settings: Settings) -> bool:
-    """Send a real 6-digit OTP email using SMTP."""
-    if not settings.smtp_host or not settings.smtp_user or not settings.smtp_password:
-        logger.warning("SMTP not configured. OTP for %s is %s", to_email, otp)
-        return False
+    """Send a real 6-digit OTP email using Resend API, Brevo API, or standard SMTP."""
+    sender_email = settings.smtp_user or "support@shopfit.vn"
+    sender_name = "ShopFit Studio"
+    sender = settings.smtp_from or f"{sender_name} <{sender_email}>"
 
-    sender = settings.smtp_from or settings.smtp_user
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Mã xác thực đặt lại mật khẩu: {otp} — ShopFit Studio"
-    msg["From"] = f"ShopFit Studio <{sender}>" if "<" not in sender else sender
-    msg["To"] = to_email
-
+    subject = f"Mã xác thực đặt lại mật khẩu: {otp} — ShopFit Studio"
     html_content = f"""<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -52,25 +49,88 @@ def send_otp_email(to_email: str, otp: str, settings: Settings) -> bool:
   </div>
 </body>
 </html>"""
-
     text_content = f"Mã xác thực đặt lại mật khẩu ShopFit của bạn là: {otp}. Mã có hiệu lực trong 15 phút. Tuyệt đối không chia sẻ mã này."
 
+    # Priority 1: Resend HTTP REST API (port 443 - works seamlessly on Render Free)
+    if settings.resend_api_key:
+        try:
+            from_addr = sender if "@" in sender and "gmail.com" not in sender else f"{sender_name} <onboarding@resend.dev>"
+            resp = httpx.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {settings.resend_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": from_addr,
+                    "to": [to_email],
+                    "subject": subject,
+                    "html": html_content,
+                    "text": text_content,
+                },
+                timeout=15,
+            )
+            if resp.status_code in (200, 201):
+                logger.info("Sent real OTP email successfully via Resend API to %s", to_email)
+                return True
+            else:
+                logger.error("Resend API failed (%s): %s", resp.status_code, resp.text)
+        except Exception as e:
+            logger.error("Resend API error: %s", e)
+
+    # Priority 2: Brevo HTTP REST API (port 443 - works with any sender email including @gmail.com)
+    if settings.brevo_api_key:
+        try:
+            resp = httpx.post(
+                "https://api.brevo.com/v3/smtp/email",
+                headers={
+                    "api-key": settings.brevo_api_key,
+                    "Content-Type": "application/json",
+                    "accept": "application/json",
+                },
+                json={
+                    "sender": {"name": sender_name, "email": sender_email},
+                    "to": [{"email": to_email}],
+                    "subject": subject,
+                    "htmlContent": html_content,
+                    "textContent": text_content,
+                },
+                timeout=15,
+            )
+            if resp.status_code in (200, 201):
+                logger.info("Sent real OTP email successfully via Brevo API to %s", to_email)
+                return True
+            else:
+                logger.error("Brevo API failed (%s): %s", resp.status_code, resp.text)
+        except Exception as e:
+            logger.error("Brevo API error: %s", e)
+
+    # Priority 3: Standard SMTP (for environments where outbound ports 587/465 are unblocked)
+    if not settings.smtp_host or not settings.smtp_user or not settings.smtp_password:
+        logger.warning("No email provider configured (SMTP/Resend/Brevo). OTP for %s is %s", to_email, otp)
+        return False
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender if "<" in sender else f"{sender_name} <{sender}>"
+    msg["To"] = to_email
     msg.attach(MIMEText(text_content, "plain", "utf-8"))
     msg.attach(MIMEText(html_content, "html", "utf-8"))
 
     try:
+        clean_password = settings.smtp_password.replace(" ", "") if "gmail.com" in settings.smtp_host else settings.smtp_password
         if settings.smtp_port == 465:
             with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=15) as server:
-                server.login(settings.smtp_user, settings.smtp_password)
+                server.login(settings.smtp_user, clean_password)
                 server.sendmail(sender, [to_email], msg.as_string())
         else:
             with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as server:
                 if settings.smtp_use_tls:
                     server.starttls()
-                server.login(settings.smtp_user, settings.smtp_password)
+                server.login(settings.smtp_user, clean_password)
                 server.sendmail(sender, [to_email], msg.as_string())
-        logger.info("Sent real OTP email successfully to %s", to_email)
+        logger.info("Sent real OTP email successfully via SMTP to %s", to_email)
         return True
     except Exception as e:
-        logger.error("Failed to send OTP email to %s: %s", to_email, e)
+        logger.error("Failed to send OTP email via SMTP to %s: %s", to_email, e)
         return False

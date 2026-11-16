@@ -44,6 +44,8 @@ class Settings:
     smtp_password: str = field(default_factory=lambda: os.getenv("SMTP_PASSWORD", "").strip())
     smtp_from: str = field(default_factory=lambda: os.getenv("SMTP_FROM", "").strip())
     smtp_use_tls: bool = field(default_factory=lambda: os.getenv("SMTP_USE_TLS", "true").lower() == "true")
+    resend_api_key: str = field(default_factory=lambda: os.getenv("RESEND_API_KEY", "").strip())
+    brevo_api_key: str = field(default_factory=lambda: os.getenv("BREVO_API_KEY", "").strip())
 
     def __post_init__(self):
         if self.image_size not in {"512", "1K"}:

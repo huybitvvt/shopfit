@@ -84,11 +84,23 @@ export default function BodyProfileScreen() {
     return () => { active = false; };
   }, [user]));
 
-  function applyPreset(preset: SizePreset) {
+  async function applyPreset(preset: SizePreset) {
     setActivePreset(`${presetGender}-${preset.label}`);
     setValues(Object.fromEntries(Object.entries(preset.data).map(([k, v]) => [k, String(v)])));
     setError(null);
-    notify(`Đã tự động điền số đo chuẩn ${presetGender === 'nam' ? 'Nam' : 'Nữ'} size ${preset.label}.`);
+    setBusy(true);
+    try {
+      const payload: Record<string, number | string | null> = {
+        ...preset.data,
+        fit_preference: preference,
+      };
+      await request('/api/body-profile', { method: 'PATCH', body: JSON.stringify(payload) });
+      notify(`✓ Đã lưu thành công số đo chuẩn ${presetGender === 'nam' ? 'Nam' : 'Nữ'} size ${preset.label}!`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function save() {

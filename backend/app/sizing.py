@@ -97,11 +97,12 @@ def advise(product, profile, color, reference=None):
     for row in chart["rows"]:
         # Show measured regions even for an unavailable size, but never recommend out-of-stock variants.
         region_checks = []
-        for key in required:
-            if row.get(key) is None:
+        all_eval_keys = ["chest_cm", "waist_cm", "hip_cm"]
+        for key in all_eval_keys:
+            if row.get(key) is None or profile.get(key) is None:
                 continue
             gap = round(row[key] - profile[key], 1)
-            target = max(0, chart["ease"][key] + adjustment)
+            target = max(0, chart["ease"].get(key, 4) + adjustment)
             region_checks.append({"key": key, "label": LABELS[key], "body_cm": profile[key], "garment_cm": row[key],
                                   "ease_cm": gap, "target_cm": target, "too_tight": gap < 0, "region": fit_region(gap, target)})
         result["regions"][row["size"]] = region_checks
@@ -109,10 +110,12 @@ def advise(product, profile, color, reference=None):
             continue
         if not any(v["size"] == row["size"] and v["color"] == color and v["stock"] > 0 for v in product["variants"]):
             continue
-        checks = region_checks
+        checks = [c for c in region_checks if c["key"] in required]
+        if not checks:
+            checks = region_checks
         eligible = all(c["ease_cm"] >= c["target_cm"] for c in checks)
         score = sum(abs(c["ease_cm"] - c["target_cm"]) for c in checks)
-        result["candidates"].append({"size": row["size"], "eligible": eligible, "score": round(score, 2), "checks": checks})
+        result["candidates"].append({"size": row["size"], "eligible": eligible, "score": round(score, 2), "checks": region_checks})
     eligible = [c for c in result["candidates"] if c["eligible"]]
     if eligible:
         result["recommended_size"] = min(eligible, key=lambda c: c["score"])["size"]

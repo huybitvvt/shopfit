@@ -1,7 +1,16 @@
 import { Platform } from 'react-native';
 import type { PickedPhoto } from './types';
 
-export const DEFAULT_API_URL = (process.env.EXPO_PUBLIC_API_URL || (Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000')).replace(/\/$/, '');
+const isBrowserRemote = Platform.OS === 'web' && typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+
+export const DEFAULT_API_URL = (
+  process.env.EXPO_PUBLIC_API_URL ||
+  (isBrowserRemote
+    ? 'https://shopfit-api.onrender.com'
+    : Platform.OS === 'android'
+    ? 'http://10.0.2.2:8000'
+    : 'http://localhost:8000')
+).replace(/\/$/, '');
 export let API_URL = DEFAULT_API_URL;
 export function setApiUrl(value: string) { API_URL = value.replace(/\/$/, ''); }
 let token: string | null = null;

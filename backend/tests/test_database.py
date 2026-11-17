@@ -126,7 +126,7 @@ def test_postgres_migration_verifies_rows_and_refuses_repeat(pg_db, client, tmp_
     source = client.app.state.db.path
     result = migrate_sqlite(source, pg_db, tmp_path / "backups")
     assert result["rows"]["orders"] == result["rows"]["order_items"] == 1
-    assert result["rows"]["users"] == 2
+    assert result["rows"]["users"] == 3
     assert source.exists()
     with pg_db.connect() as conn:
         assert conn.execute("SELECT total FROM orders WHERE id=?", (order["id"],)).fetchone()[0] == order["total"]

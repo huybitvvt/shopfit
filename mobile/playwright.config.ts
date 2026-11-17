@@ -18,6 +18,6 @@ export default defineConfig({
   },
   webServer: [
     { command: 'node ../scripts/api.mjs', url: 'http://localhost:8000/api/health', reuseExistingServer: true, timeout: 30000 },
-    { command: 'npx expo start --web --port 8081 --localhost', url: 'http://localhost:8081', reuseExistingServer: true, timeout: 120000, env: { BROWSER: 'none', CI: '1' } },
+    { command: 'npx expo start --web --port 8081 --localhost', url: 'http://localhost:8081', reuseExistingServer: true, timeout: 120000, env: { BROWSER: 'none', CI: '1', EXPO_PUBLIC_API_URL: 'http://localhost:8000' } },
   ],
 });

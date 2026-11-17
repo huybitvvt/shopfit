@@ -1,23 +1,27 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { mediaUrl, photoForm, request } from '../api';
-import { Button, Empty, ErrorMessage, Field, Header, IconButton, Screen, s } from '../components/ui';
+import { AdminDashboard, type AdminSummary } from '../components/admin-dashboard';
+import { Button, Empty, ErrorMessage, Field, Header, IconButton, Screen, ToastOverlay, s } from '../components/ui';
 import { useStore } from '../store';
-import { money, theme as t } from '../theme';
-import type { PickedPhoto, Product, TryonAnalytics, Variant } from '../types';
-
-type Summary = {
-  products: number;
-  pending_orders: number;
-  revenue: number;
-  tryons: number;
-  conversion_rate?: number;
-  low_stock_products?: number;
-};
+import { money, normalizeVi, theme as t } from '../theme';
+import type { AdminPayment, Color, PickedPhoto, Product, TryonAnalytics } from '../types';
 
 interface CategoryOption {
   name: string;
@@ -35,7 +39,7 @@ const DEFAULT_CATEGORIES: CategoryOption[] = [
   { name: 'Set bộ', tryon_category: 'one-pieces' },
 ];
 
-const POPULAR_COLORS = [
+const POPULAR_COLORS: Color[] = [
   { name: 'Trắng', hex: '#FFFFFF' },
   { name: 'Đen', hex: '#1C2421' },
   { name: 'Xám ghi', hex: '#9CA3AF' },
@@ -50,12 +54,15 @@ const POPULAR_COLORS = [
 ];
 
 const ALL_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL'];
+const CUSTOM_CAT_STORAGE_KEY = 'shopfit-custom-categories';
 
 export default function Admin() {
   const { user, refresh, notify } = useStore();
   const [products, setProducts] = useState<Product[]>([]);
-  const [summary, setSummary] = useState<Summary | null>(null);
+  const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [analytics, setAnalytics] = useState<TryonAnalytics | null>(null);
+  const [payments, setPayments] = useState<AdminPayment[]>([]);
+  const [paymentBusyId, setPaymentBusyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -67,9 +74,10 @@ export default function Admin() {
   const [filterCategory, setFilterCategory] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'HIDDEN' | 'LOW_STOCK'>('ALL');
 
-  // Form State
+  // Form State (shared between Create & Full Edit)
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
+  const [originalPrice, setOriginalPrice] = useState('');
   const [category, setCategory] = useState('Áo');
   const [customCategories, setCustomCategories] = useState<CategoryOption[]>([]);
   const [showAddCatModal, setShowAddCatModal] = useState(false);
@@ -79,39 +87,54 @@ export default function Admin() {
   const [description, setDescription] = useState('');
   const [material, setMaterial] = useState('Cotton');
 
-  // Colors
-  const [colorName, setColorName] = useState('Trắng');
-  const [colorHex, setColorHex] = useState('#FFFFFF');
-  const [showHexInput, setShowHexInput] = useState(false);
+  // Multi-Color palette selection
+  const [selectedColors, setSelectedColors] = useState<Color[]>([{ name: 'Trắng', hex: '#FFFFFF' }]);
+  const [customColorName, setCustomColorName] = useState('');
+  const [customColorHex, setCustomColorHex] = useState('#344E40');
+  const [showCustomColor, setShowCustomColor] = useState(false);
 
-  // Per-size inventory
+  // Sizes & Per-(size, color) stock matrix
   const [selectedSizes, setSelectedSizes] = useState<string[]>(['S', 'M', 'L', 'XL']);
-  const [sizeStocks, setSizeStocks] = useState<Record<string, string>>({
-    S: '15',
-    M: '30',
-    L: '25',
-    XL: '10',
-  });
+  const [stockMatrix, setStockMatrix] = useState<Record<string, string>>({});
   const [batchStock, setBatchStock] = useState('');
 
+  // Photos (new picked photos + existing URLs when editing)
   const [photo, setPhoto] = useState<PickedPhoto | null>(null);
   const [backPhoto, setBackPhoto] = useState<PickedPhoto | null>(null);
   const [detailPhoto, setDetailPhoto] = useState<PickedPhoto | null>(null);
-  const [variants, setVariants] = useState<Variant[]>([]);
+  const [existingBackUrl, setExistingBackUrl] = useState<string | null>(null);
+  const [existingDetailUrl, setExistingDetailUrl] = useState<string | null>(null);
+
   const [busy, setBusy] = useState(false);
   const wide = useWindowDimensions().width >= 750;
 
+  useEffect(() => {
+    void AsyncStorage.getItem(CUSTOM_CAT_STORAGE_KEY).then(raw => {
+      if (!raw) return;
+      try {
+        setCustomCategories(JSON.parse(raw));
+      } catch {
+        // ignore
+      }
+    });
+  }, []);
+
   const load = useCallback(async () => {
-    if (user?.role !== 'admin') { setLoading(false); return; }
+    if (user?.role !== 'admin') {
+      setLoading(false);
+      return;
+    }
     try {
-      const [p, stats, ana] = await Promise.all([
+      const [p, stats, ana, payList] = await Promise.all([
         request<Product[]>('/api/admin/products'),
-        request<Summary>('/api/admin/summary'),
+        request<AdminSummary>('/api/admin/summary'),
         request<TryonAnalytics>('/api/admin/tryon-analytics').catch(() => null),
+        request<AdminPayment[]>('/api/admin/payments').catch(() => []),
       ]);
       setProducts(p);
       setSummary(stats);
       if (ana) setAnalytics(ana);
+      setPayments(payList);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -120,9 +143,38 @@ export default function Admin() {
     }
   }, [user?.role]);
 
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load])
+  );
 
-  // Combine default categories with custom categories and any unique categories from existing products
+  async function handleApprovePayment(id: string) {
+    setPaymentBusyId(id);
+    try {
+      await request(`/api/admin/payments/${id}/approve`, { method: 'POST' });
+      await load();
+      notify('Đã duyệt giao dịch & cộng lượt thử cho khách hàng.');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPaymentBusyId(null);
+    }
+  }
+
+  async function handleRejectPayment(id: string) {
+    setPaymentBusyId(id);
+    try {
+      await request(`/api/admin/payments/${id}/reject`, { method: 'POST' });
+      await load();
+      notify('Đã từ chối giao dịch.');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPaymentBusyId(null);
+    }
+  }
+
   const allCategories = useMemo(() => {
     const map = new Map<string, CategoryOption>();
     for (const c of DEFAULT_CATEGORIES) map.set(c.name, c);
@@ -135,24 +187,17 @@ export default function Admin() {
     return Array.from(map.values());
   }, [customCategories, products]);
 
-  // Filtered Products list
   const filteredProducts = useMemo(() => {
+    const q = normalizeVi(searchQuery);
     return products.filter(p => {
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        if (!p.name.toLowerCase().includes(q) && !p.category.toLowerCase().includes(q)) {
-          return false;
-        }
+      if (q) {
+        const hay = normalizeVi(`${p.name} ${p.category} ${p.material}`);
+        if (!hay.includes(q)) return false;
       }
-      if (filterCategory !== 'ALL' && p.category !== filterCategory) {
-        return false;
-      }
+      if (filterCategory !== 'ALL' && p.category !== filterCategory) return false;
       if (filterStatus === 'ACTIVE' && !p.active) return false;
       if (filterStatus === 'HIDDEN' && p.active) return false;
-      if (filterStatus === 'LOW_STOCK') {
-        const hasLow = p.variants.some(v => v.stock <= 3);
-        if (!hasLow) return false;
-      }
+      if (filterStatus === 'LOW_STOCK' && !p.variants.some(v => v.stock <= 3)) return false;
       return true;
     });
   }, [products, searchQuery, filterCategory, filterStatus]);
@@ -161,19 +206,38 @@ export default function Admin() {
     setEditing(product || null);
     setName(product?.name || '');
     setPrice(product ? String(product.price) : '');
+    setOriginalPrice(product?.original_price ? String(product.original_price) : '');
     setCategory(product?.category || 'Áo');
-    setDescription('');
+    setDescription(product?.description || '');
+    setMaterial(product?.material || 'Cotton');
+
+    const initColors = product?.colors.length ? product.colors.map(c => ({ ...c })) : [{ name: 'Trắng', hex: '#FFFFFF' }];
+    const initSizes = product?.sizes.length ? [...product.sizes] : ['S', 'M', 'L', 'XL'];
+    setSelectedColors(initColors);
+    setSelectedSizes(initSizes);
+
+    const matrix: Record<string, string> = {};
+    if (product) {
+      for (const v of product.variants) {
+        matrix[`${v.color}:${v.size}`] = String(v.stock);
+      }
+    } else {
+      const defaults: Record<string, string> = { S: '15', M: '30', L: '25', XL: '10' };
+      for (const c of initColors) {
+        for (const sz of initSizes) {
+          matrix[`${c.name}:${sz}`] = defaults[sz] || '15';
+        }
+      }
+    }
+    setStockMatrix(matrix);
+    setBatchStock('');
     setPhoto(null);
     setBackPhoto(null);
     setDetailPhoto(null);
-    setMaterial('Cotton');
-    setColorName('Trắng');
-    setColorHex('#FFFFFF');
-    setShowHexInput(false);
-    setSelectedSizes(['S', 'M', 'L', 'XL']);
-    setSizeStocks({ S: '15', M: '30', L: '25', XL: '10' });
-    setBatchStock('');
-    setVariants(product?.variants.map(v => ({ ...v })) || []);
+    setExistingBackUrl(product?.back_image_url || product?.size_chart?.back_image_url || null);
+    setExistingDetailUrl(product?.detail_image_url || product?.size_chart?.detail_image_url || null);
+    setShowCustomColor(false);
+    setCustomColorName('');
     setFormError(null);
     setShowForm(true);
   }
@@ -191,17 +255,42 @@ export default function Admin() {
     }
   }
 
-  function handleColorSelect(item: { name: string; hex: string }) {
-    setColorName(item.name);
-    setColorHex(item.hex);
+  function toggleColorSwatch(swatch: Color) {
+    const exists = selectedColors.some(c => c.name === swatch.name);
+    if (exists) {
+      if (selectedColors.length <= 1) {
+        setFormError('Sản phẩm cần có ít nhất 1 màu.');
+        return;
+      }
+      setSelectedColors(prev => prev.filter(c => c.name !== swatch.name));
+    } else {
+      setSelectedColors(prev => [...prev, swatch]);
+      setStockMatrix(prev => {
+        const next = { ...prev };
+        for (const sz of selectedSizes) {
+          const key = `${swatch.name}:${sz}`;
+          if (next[key] === undefined) next[key] = '15';
+        }
+        return next;
+      });
+    }
   }
 
-  function handleColorNameChange(text: string) {
-    setColorName(text);
-    const matched = POPULAR_COLORS.find(c => c.name.toLowerCase() === text.trim().toLowerCase());
-    if (matched) {
-      setColorHex(matched.hex);
+  function addCustomColor() {
+    const cname = customColorName.trim();
+    const chex = customColorHex.trim();
+    if (!cname || !/^#[0-9A-Fa-f]{6}$/.test(chex)) {
+      setFormError('Nhập tên màu và mã HEX hợp lệ (ví dụ #344E40).');
+      return;
     }
+    if (selectedColors.some(c => c.name.toLowerCase() === cname.toLowerCase())) {
+      setFormError('Màu này đã có trong danh sách đã chọn.');
+      return;
+    }
+    toggleColorSwatch({ name: cname, hex: chex });
+    setCustomColorName('');
+    setShowCustomColor(false);
+    setFormError(null);
   }
 
   function toggleSize(sz: string) {
@@ -213,9 +302,14 @@ export default function Admin() {
       setSelectedSizes(prev => prev.filter(s => s !== sz));
     } else {
       setSelectedSizes(prev => [...prev, sz]);
-      if (!sizeStocks[sz]) {
-        setSizeStocks(prev => ({ ...prev, [sz]: '15' }));
-      }
+      setStockMatrix(prev => {
+        const next = { ...prev };
+        for (const c of selectedColors) {
+          const key = `${c.name}:${sz}`;
+          if (next[key] === undefined) next[key] = '15';
+        }
+        return next;
+      });
     }
   }
 
@@ -223,14 +317,16 @@ export default function Admin() {
     if (!batchStock.trim()) return;
     const num = batchStock.replace(/\D/g, '') || '0';
     const updated: Record<string, string> = {};
-    for (const s of selectedSizes) {
-      updated[s] = num;
+    for (const c of selectedColors) {
+      for (const sz of selectedSizes) {
+        updated[`${c.name}:${sz}`] = num;
+      }
     }
-    setSizeStocks(prev => ({ ...prev, ...updated }));
-    notify(`Đã điền ${num} cái cho tất cả ${selectedSizes.length} size.`);
+    setStockMatrix(prev => ({ ...prev, ...updated }));
+    notify(`Đã điền ${num} cái cho tất cả biến thể màu/size.`);
   }
 
-  function handleCreateCategory() {
+  async function handleCreateCategory() {
     const trimmed = newCatName.trim();
     if (trimmed.length < 2) {
       setFormError('Tên danh mục cần ít nhất 2 ký tự.');
@@ -238,12 +334,14 @@ export default function Admin() {
     }
     const exists = allCategories.some(c => c.name.toLowerCase() === trimmed.toLowerCase());
     if (!exists) {
-      setCustomCategories(prev => [...prev, { name: trimmed, tryon_category: newCatTryon }]);
+      const updated = [...customCategories, { name: trimmed, tryon_category: newCatTryon }];
+      setCustomCategories(updated);
+      await AsyncStorage.setItem(CUSTOM_CAT_STORAGE_KEY, JSON.stringify(updated));
     }
     setCategory(trimmed);
     setShowAddCatModal(false);
     setNewCatName('');
-    notify(`Đã chọn danh mục "${trimmed}".`);
+    notify(`Đã lưu & chọn danh mục "${trimmed}".`);
   }
 
   async function save() {
@@ -251,69 +349,89 @@ export default function Admin() {
       setFormError('Nhập tên sản phẩm và giá bán nguyên dương hợp lệ.');
       return;
     }
-    if (!editing) {
-      if (!photo) { setFormError('Vui lòng chọn ảnh đại diện sản phẩm.'); return; }
-      if (description.trim().length < 10) { setFormError('Nhập mô tả sản phẩm ít nhất 10 ký tự.'); return; }
-      if (!colorName.trim() || !/^#[0-9A-Fa-f]{6}$/.test(colorHex)) { setFormError('Tên màu hoặc mã màu HEX không hợp lệ.'); return; }
-      if (selectedSizes.length === 0) { setFormError('Vui lòng chọn ít nhất 1 size.'); return; }
+    if (description.trim().length < 10) {
+      setFormError('Nhập mô tả sản phẩm ít nhất 10 ký tự.');
+      return;
+    }
+    if (selectedColors.length === 0 || selectedSizes.length === 0) {
+      setFormError('Chọn ít nhất 1 màu sắc và 1 size.');
+      return;
+    }
+    if (!editing && !photo) {
+      setFormError('Vui lòng chọn ảnh chính diện cho thiết kế mới.');
+      return;
     }
 
     setBusy(true);
     setFormError(null);
     try {
+      // Upload any newly picked photos in parallel
+      const [mainUp, backUp, detailUp] = await Promise.all([
+        photo ? photoForm(photo, 'file').then(f => request<{ url: string }>('/api/admin/upload', { method: 'POST', body: f })) : Promise.resolve(null),
+        backPhoto
+          ? photoForm(backPhoto, 'file').then(f => request<{ url: string }>('/api/admin/upload', { method: 'POST', body: f }))
+          : Promise.resolve(null),
+        detailPhoto
+          ? photoForm(detailPhoto, 'file').then(f => request<{ url: string }>('/api/admin/upload', { method: 'POST', body: f }))
+          : Promise.resolve(null),
+      ]);
+
+      const matchedCat = allCategories.find(c => c.name === category);
+      const tryon_cat =
+        matchedCat?.tryon_category ||
+        (category.toLowerCase().includes('quần')
+          ? 'bottoms'
+          : category.toLowerCase().includes('váy') || category.toLowerCase().includes('đầm')
+          ? 'one-pieces'
+          : 'tops');
+
+      const variantList = selectedColors.flatMap(c =>
+        selectedSizes.map(sz => ({
+          size: sz,
+          color: c.name,
+          stock: Math.max(0, Math.min(10000, Number(stockMatrix[`${c.name}:${sz}`]) || 0)),
+        }))
+      );
+      const parsedOrig = originalPrice.trim() ? Number(originalPrice.replace(/\D/g, '')) : 0;
+
       if (editing) {
         await request(`/api/admin/products/${editing.id}`, {
           method: 'PATCH',
-          body: JSON.stringify({ name: name.trim(), price: Number(price), variants }),
+          body: JSON.stringify({
+            name: name.trim(),
+            price: Number(price),
+            original_price: parsedOrig,
+            category,
+            tryon_category: tryon_cat,
+            material: material.trim() || 'Cotton',
+            description: description.trim(),
+            colors: selectedColors,
+            sizes: selectedSizes,
+            variants: variantList,
+            ...(mainUp ? { image_url: mainUp.url } : {}),
+            back_image_url: backUp ? backUp.url : existingBackUrl ?? '',
+            detail_image_url: detailUp ? detailUp.url : existingDetailUrl ?? '',
+          }),
         });
       } else {
-        const form = await photoForm(photo!, 'file');
-        const upload = await request<{ url: string }>('/api/admin/upload', { method: 'POST', body: form });
-
-        let backUrl: string | undefined = undefined;
-        if (backPhoto) {
-          const backForm = await photoForm(backPhoto, 'file');
-          const backUpload = await request<{ url: string }>('/api/admin/upload', { method: 'POST', body: backForm });
-          backUrl = backUpload.url;
-        }
-
-        let detailUrl: string | undefined = undefined;
-        if (detailPhoto) {
-          const detailForm = await photoForm(detailPhoto, 'file');
-          const detailUpload = await request<{ url: string }>('/api/admin/upload', { method: 'POST', body: detailForm });
-          detailUrl = detailUpload.url;
-        }
-
-        const matchedCat = allCategories.find(c => c.name === category);
-        const tryon_cat = matchedCat?.tryon_category || (
-          category.toLowerCase().includes('quần') ? 'bottoms' :
-          category.toLowerCase().includes('váy') || category.toLowerCase().includes('đầm') ? 'one-pieces' : 'tops'
-        );
-
-        const activeSizes = selectedSizes.filter(sz => !!sizeStocks[sz]);
-        const variant_stocks = activeSizes.map(sz => ({
-          size: sz,
-          color: colorName.trim(),
-          stock: Math.max(0, Number(sizeStocks[sz]) || 0),
-        }));
-        const totalStock = variant_stocks.reduce((acc, v) => acc + v.stock, 0);
-
+        const totalStock = variantList.reduce((acc, v) => acc + v.stock, 0);
         await request('/api/admin/products', {
           method: 'POST',
           body: JSON.stringify({
             name: name.trim(),
             price: Number(price),
+            original_price: parsedOrig > 0 ? parsedOrig : null,
             category,
             tryon_category: tryon_cat,
-            image_url: upload.url,
-            back_image_url: backUrl,
-            detail_image_url: detailUrl,
-            material,
+            image_url: mainUp!.url,
+            back_image_url: backUp?.url,
+            detail_image_url: detailUp?.url,
+            material: material.trim() || 'Cotton',
             description: description.trim(),
-            colors: [{ name: colorName.trim(), hex: colorHex }],
-            sizes: activeSizes,
-            stock_per_variant: Math.max(1, Math.round(totalStock / Math.max(1, activeSizes.length))),
-            variant_stocks,
+            colors: selectedColors,
+            sizes: selectedSizes,
+            stock_per_variant: Math.max(1, Math.round(totalStock / Math.max(1, variantList.length))),
+            variant_stocks: variantList,
             tag: 'MỚI',
             featured: false,
           }),
@@ -321,7 +439,7 @@ export default function Admin() {
       }
       setShowForm(false);
       await Promise.all([load(), refresh()]);
-      notify(editing ? 'Đã cập nhật sản phẩm.' : 'Đã thêm thiết kế mới vào shop.');
+      notify(editing ? 'Đã cập nhật thiết kế.' : 'Đã thêm thiết kế mới vào bộ sưu tập.');
     } catch (e) {
       setFormError((e as Error).message);
     } finally {
@@ -332,7 +450,10 @@ export default function Admin() {
   async function toggle(product: Product) {
     setBusy(true);
     try {
-      await request(`/api/admin/products/${product.id}`, { method: 'PATCH', body: JSON.stringify({ active: !product.active }) });
+      await request(`/api/admin/products/${product.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ active: !product.active }),
+      });
       await Promise.all([load(), refresh()]);
       notify(product.active ? `Đã ẩn "${product.name}".` : `Đã mở bán lại "${product.name}".`);
     } catch (e) {
@@ -357,8 +478,13 @@ export default function Admin() {
     );
   }
 
+  const totalDraftStock = selectedColors.reduce(
+    (acc, c) => acc + selectedSizes.reduce((sAcc, sz) => sAcc + (Number(stockMatrix[`${c.name}:${sz}`]) || 0), 0),
+    0
+  );
+
   return (
-    <Screen>
+    <Screen onRefresh={load}>
       <Header
         title="ShopFit Studio"
         subtitle="SHOP MANAGEMENT"
@@ -367,216 +493,15 @@ export default function Admin() {
       />
       <ErrorMessage message={error} />
 
-      {/* METRIC CARDS / DASHBOARD */}
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
-        {/* 1. Thiết kế đang bán */}
-        <View style={[s.card, { width: wide ? '18.5%' : '47.5%', padding: 16 }]}>
-          <Ionicons name="shirt-outline" size={20} color={t.colors.green} />
-          <Text style={{ fontFamily: t.fonts.bold, fontSize: 24, color: t.colors.ink, marginTop: 12, marginBottom: 4 }}>
-            {summary?.products ?? 0}
-          </Text>
-          <Text style={[s.muted, { fontSize: 11 }]}>Thiết kế đang bán</Text>
-        </View>
-
-        {/* 2. Đơn chờ xác nhận */}
-        <View style={[s.card, {
-          width: wide ? '18.5%' : '47.5%',
-          padding: 16,
-          borderColor: (summary?.pending_orders ?? 0) > 0 ? t.colors.gold : t.colors.line,
-          backgroundColor: (summary?.pending_orders ?? 0) > 0 ? '#FFFDF5' : 'white',
-        }]}>
-          <Ionicons name="receipt-outline" size={20} color={(summary?.pending_orders ?? 0) > 0 ? '#B45309' : t.colors.green} />
-          <Text style={{ fontFamily: t.fonts.bold, fontSize: 24, color: (summary?.pending_orders ?? 0) > 0 ? '#B45309' : t.colors.ink, marginTop: 12, marginBottom: 4 }}>
-            {summary?.pending_orders ?? 0}
-          </Text>
-          <Text style={[s.muted, { fontSize: 11 }]}>Đơn chờ xác nhận</Text>
-        </View>
-
-        {/* 3. Doanh thu hoàn tất */}
-        <View style={[s.card, { width: wide ? '18.5%' : '47.5%', padding: 16 }]}>
-          <Ionicons name="wallet-outline" size={20} color={t.colors.green} />
-          <Text style={{ fontFamily: t.fonts.bold, fontSize: 20, color: t.colors.ink, marginTop: 14, marginBottom: 4 }}>
-            {money(summary?.revenue ?? 0)}
-          </Text>
-          <Text style={[s.muted, { fontSize: 11 }]}>Doanh thu hoàn tất</Text>
-        </View>
-
-        {/* 4. Lượt thử AI */}
-        <View style={[s.card, { width: wide ? '18.5%' : '47.5%', padding: 16 }]}>
-          <Ionicons name="sparkles-outline" size={20} color={t.colors.green} />
-          <Text style={{ fontFamily: t.fonts.bold, fontSize: 24, color: t.colors.ink, marginTop: 12, marginBottom: 4 }}>
-            {summary?.tryons ?? 0}
-          </Text>
-          <Text style={[s.muted, { fontSize: 11 }]}>Lượt thử thành công</Text>
-        </View>
-
-        {/* 5. Tỷ lệ Thử ➔ Mua (Try-to-Buy Rate) */}
-        <View style={[s.card, { width: wide ? '18.5%' : '100%', padding: 16, backgroundColor: '#F3F7F4' }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Ionicons name="trending-up-outline" size={20} color={t.colors.green} />
-            <Text style={{ fontSize: 9, fontFamily: t.fonts.bold, color: t.colors.green, backgroundColor: '#D7E5DC', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-              AI RETAIL
-            </Text>
-          </View>
-          <Text style={{ fontFamily: t.fonts.bold, fontSize: 24, color: t.colors.green, marginTop: 12, marginBottom: 4 }}>
-            {summary?.conversion_rate ?? 0}%
-          </Text>
-          <Text style={[s.muted, { fontSize: 11 }]}>Tỷ lệ mua sau thử</Text>
-        </View>
-      </View>
-
-      {/* QUICK SHORTCUT BUTTONS */}
-      <View style={{ flexDirection: wide ? 'row' : 'column', gap: 10, marginBottom: 24 }}>
-        <Button
-          icon="receipt-outline"
-          variant="secondary"
-          onPress={() => router.push('/orders')}
-          style={{ flex: 1 }}
-        >
-          {`Xem và xử lý đơn hàng ${summary?.pending_orders ? `(${summary.pending_orders} đơn mới)` : ''}`}
-        </Button>
-        <Button
-          icon="analytics-outline"
-          variant="outline"
-          onPress={() => router.push('/fit-insights')}
-          style={{ flex: 1 }}
-        >
-          Chất lượng độ vừa & hạn mức AI
-        </Button>
-      </View>
-
-      {/* AI TRY-ON & CONVERSION ANALYTICS CARD */}
-      <View
-        style={[
-          s.card,
-          {
-            backgroundColor: '#FAF8F5',
-            borderColor: '#E6E1D6',
-            padding: 18,
-            marginBottom: 24,
-          },
-        ]}
-      >
-        <View style={[s.between, { marginBottom: 12, flexWrap: 'wrap', gap: 8 }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            <View style={{ backgroundColor: '#D7E5DC', padding: 8, borderRadius: 8 }}>
-              <Ionicons name="sparkles" size={18} color={t.colors.green} />
-            </View>
-            <View>
-              <Text style={{ fontFamily: t.fonts.bold, fontSize: 15, color: t.colors.ink }}>
-                Top thiết kế được thử & Tỷ lệ chốt đơn (AI Retail Analytics)
-              </Text>
-              <Text style={[s.muted, { fontSize: 11, marginTop: 2 }]}>
-                Đo lường sản phẩm khách thử nhiều nhất và tỷ lệ mua sau khi dùng phòng thử đồ AI
-              </Text>
-            </View>
-          </View>
-          <View style={{ backgroundColor: t.colors.greenLight, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 }}>
-            <Text style={{ fontFamily: t.fonts.bold, fontSize: 11, color: t.colors.green }}>
-              TB toàn shop: {analytics?.avg_conversion_rate ?? summary?.conversion_rate ?? 0}% chốt đơn
-            </Text>
-          </View>
-        </View>
-
-        {(!analytics?.top_products || analytics.top_products.length === 0) ? (
-          <View style={{ paddingVertical: 16, alignItems: 'center' }}>
-            <Text style={[s.muted, { fontSize: 12 }]}>
-              Chưa có dữ liệu thử đồ AI. Dữ liệu xếp hạng sẽ hiển thị tại đây khi khách hàng tạo ảnh thử đồ.
-            </Text>
-          </View>
-        ) : (
-          <View style={{ gap: 10 }}>
-            {analytics.top_products.map((item, idx) => (
-              <View
-                key={item.product_id}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  backgroundColor: 'white',
-                  borderRadius: 10,
-                  padding: 10,
-                  borderWidth: 1,
-                  borderColor: '#EFECE6',
-                  gap: 12,
-                }}
-              >
-                {/* Rank Badge */}
-                <View
-                  style={{
-                    width: 26,
-                    height: 26,
-                    borderRadius: 13,
-                    backgroundColor: idx === 0 ? '#FEF3C7' : idx === 1 ? '#E0E7FF' : '#F3F4F6',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Text
-                    style={{
-                      fontFamily: t.fonts.bold,
-                      fontSize: 12,
-                      color: idx === 0 ? '#B45309' : idx === 1 ? '#3730A3' : t.colors.muted,
-                    }}
-                  >
-                    #{idx + 1}
-                  </Text>
-                </View>
-
-                {/* Product Thumbnail */}
-                <Image
-                  source={mediaUrl(item.image_url)}
-                  contentFit="cover"
-                  style={{ width: 44, height: 55, borderRadius: 6, backgroundColor: t.colors.sand }}
-                />
-
-                {/* Info */}
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontFamily: t.fonts.medium, fontSize: 13, color: t.colors.ink }} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  <Text style={[s.muted, { fontSize: 11, marginTop: 2 }]}>
-                    {item.category} · {money(item.price)}
-                  </Text>
-                </View>
-
-                {/* Stat pills */}
-                <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                  <View style={{ flexDirection: 'row', gap: 6 }}>
-                    <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 }}>
-                      <Text style={{ fontSize: 10, fontFamily: t.fonts.medium, color: t.colors.ink }}>
-                        {item.tryon_count} lượt thử
-                      </Text>
-                    </View>
-                    <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 }}>
-                      <Text style={{ fontSize: 10, fontFamily: t.fonts.medium, color: t.colors.ink }}>
-                        {item.order_count} đơn mua
-                      </Text>
-                    </View>
-                  </View>
-                  <View
-                    style={{
-                      backgroundColor: item.conversion_rate >= 20 ? '#D1FAE5' : item.conversion_rate > 0 ? '#FEF3C7' : '#F3F4F6',
-                      paddingHorizontal: 8,
-                      paddingVertical: 2,
-                      borderRadius: 4,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        fontSize: 10,
-                        fontFamily: t.fonts.bold,
-                        color: item.conversion_rate >= 20 ? '#047857' : item.conversion_rate > 0 ? '#B45309' : t.colors.muted,
-                      }}
-                    >
-                      {item.conversion_rate}% chốt đơn
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-      </View>
+      <AdminDashboard
+        summary={summary}
+        analytics={analytics}
+        payments={payments}
+        paymentBusyId={paymentBusyId}
+        onApprovePayment={id => void handleApprovePayment(id)}
+        onRejectPayment={id => void handleRejectPayment(id)}
+        wide={wide}
+      />
 
       {/* PRODUCT LIST HEADER & ADD BUTTON */}
       <View style={[s.between, { marginTop: 16, marginBottom: 14 }]}>
@@ -586,32 +511,38 @@ export default function Admin() {
             {filteredProducts.length} / {products.length} mẫu hiển thị
           </Text>
         </View>
-        <Button icon="add" onPress={() => openForm()}>Thêm mẫu mới</Button>
+        <Button icon="add" onPress={() => openForm()}>
+          Thêm mẫu mới
+        </Button>
       </View>
 
       {/* SEARCH & FILTER CONTROLS */}
-      <View style={{
-        backgroundColor: '#FAF8F5',
-        borderWidth: 1,
-        borderColor: '#EAE6DD',
-        borderRadius: 12,
-        padding: 12,
-        marginBottom: 18,
-        gap: 10,
-      }}>
-        {/* Search Bar */}
-        <View style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          backgroundColor: 'white',
+      <View
+        style={{
+          backgroundColor: '#FAF8F5',
           borderWidth: 1,
-          borderColor: t.colors.line,
-          borderRadius: 8,
-          paddingHorizontal: 12,
-          height: 42,
-        }}>
+          borderColor: '#EAE6DD',
+          borderRadius: 12,
+          padding: 12,
+          marginBottom: 18,
+          gap: 10,
+        }}
+      >
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: 'white',
+            borderWidth: 1,
+            borderColor: t.colors.line,
+            borderRadius: 8,
+            paddingHorizontal: 12,
+            height: 42,
+          }}
+        >
           <Ionicons name="search-outline" size={18} color={t.colors.muted} style={{ marginRight: 8 }} />
           <TextInput
+            accessibilityLabel="Tìm sản phẩm trong shop"
             placeholder="Tìm theo tên thiết kế, chất liệu, danh mục..."
             placeholderTextColor={t.colors.muted}
             value={searchQuery}
@@ -619,16 +550,16 @@ export default function Admin() {
             style={{ flex: 1, fontSize: 13, color: t.colors.ink, fontFamily: t.fonts.regular }}
           />
           {searchQuery ? (
-            <Pressable onPress={() => setSearchQuery('')}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Xóa tìm kiếm" onPress={() => setSearchQuery('')}>
               <Ionicons name="close-circle" size={16} color={t.colors.muted} />
             </Pressable>
           ) : null}
         </View>
 
-        {/* Filter Pills */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <Text style={[s.muted, { fontSize: 11, marginRight: 4 }]}>Danh mục:</Text>
           <Pressable
+            accessibilityRole="button"
             onPress={() => setFilterCategory('ALL')}
             style={{
               paddingHorizontal: 10,
@@ -642,6 +573,7 @@ export default function Admin() {
           {allCategories.map(c => (
             <Pressable
               key={c.name}
+              accessibilityRole="button"
               onPress={() => setFilterCategory(c.name)}
               style={{
                 paddingHorizontal: 10,
@@ -650,22 +582,26 @@ export default function Admin() {
                 backgroundColor: filterCategory === c.name ? t.colors.green : '#EEECE8',
               }}
             >
-              <Text style={{ fontSize: 11, color: filterCategory === c.name ? 'white' : t.colors.ink, fontFamily: t.fonts.medium }}>{c.name}</Text>
+              <Text style={{ fontSize: 11, color: filterCategory === c.name ? 'white' : t.colors.ink, fontFamily: t.fonts.medium }}>
+                {c.name}
+              </Text>
             </Pressable>
           ))}
         </View>
 
-        {/* Status Pills */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <Text style={[s.muted, { fontSize: 11, marginRight: 4 }]}>Trạng thái:</Text>
-          {([
-            ['ALL', 'Tất cả'],
-            ['ACTIVE', 'Đang bán'],
-            ['LOW_STOCK', '⚠️ Sắp hết'],
-            ['HIDDEN', 'Đã ẩn'],
-          ] as const).map(([st, label]) => (
+          {(
+            [
+              ['ALL', 'Tất cả'],
+              ['ACTIVE', 'Đang bán'],
+              ['LOW_STOCK', '⚠️ Sắp hết'],
+              ['HIDDEN', 'Đã ẩn'],
+            ] as const
+          ).map(([st, label]) => (
             <Pressable
               key={st}
+              accessibilityRole="button"
               onPress={() => setFilterStatus(st)}
               style={{
                 paddingHorizontal: 10,
@@ -713,10 +649,7 @@ export default function Admin() {
               />
               <View style={{ flex: 1 }}>
                 <View style={[s.between]}>
-                  <Text style={[s.text, { fontFamily: t.fonts.medium, fontSize: 15, flex: 1 }]}>
-                    {product.name}
-                  </Text>
-                  {/* Badges */}
+                  <Text style={[s.text, { fontFamily: t.fonts.medium, fontSize: 15, flex: 1 }]}>{product.name}</Text>
                   <View style={{ flexDirection: 'row', gap: 6 }}>
                     {isOutOfStock ? (
                       <View style={{ backgroundColor: '#FEE2E2', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 }}>
@@ -727,17 +660,15 @@ export default function Admin() {
                         <Text style={{ color: '#B45309', fontSize: 10, fontFamily: t.fonts.bold }}>⚠️ SẮP HẾT</Text>
                       </View>
                     ) : null}
-                    <View style={{
-                      backgroundColor: product.active ? t.colors.greenLight : '#F3F4F6',
-                      paddingHorizontal: 7,
-                      paddingVertical: 2,
-                      borderRadius: 4,
-                    }}>
-                      <Text style={{
-                        color: product.active ? t.colors.green : t.colors.muted,
-                        fontSize: 9,
-                        fontFamily: t.fonts.bold,
-                      }}>
+                    <View
+                      style={{
+                        backgroundColor: product.active ? t.colors.greenLight : '#F3F4F6',
+                        paddingHorizontal: 7,
+                        paddingVertical: 2,
+                        borderRadius: 4,
+                      }}
+                    >
+                      <Text style={{ color: product.active ? t.colors.green : t.colors.muted, fontSize: 9, fontFamily: t.fonts.bold }}>
                         {product.active ? 'ĐANG BÁN' : 'ĐÃ ẨN'}
                       </Text>
                     </View>
@@ -745,10 +676,10 @@ export default function Admin() {
                 </View>
 
                 <Text style={[s.muted, { fontSize: 12, marginTop: 4 }]}>
-                  {money(product.price)} · Tổng tồn: <Text style={{ fontFamily: t.fonts.bold, color: t.colors.ink }}>{product.stock}</Text> ({product.category})
+                  {money(product.price)} · Tổng tồn: <Text style={{ fontFamily: t.fonts.bold, color: t.colors.ink }}>{product.stock}</Text> (
+                  {product.category})
                 </Text>
 
-                {/* Per-size inventory preview */}
                 <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
                   {product.variants.map(v => (
                     <Text
@@ -765,12 +696,11 @@ export default function Admin() {
                         fontFamily: t.fonts.medium,
                       }}
                     >
-                      {v.size}: {v.stock}
+                      {product.colors.length > 1 ? `${v.color}·${v.size}` : v.size}: {v.stock}
                     </Text>
                   ))}
                 </View>
 
-                {/* Action Row */}
                 <View style={[s.row, { flexWrap: 'wrap', marginTop: 10, gap: 14 }]}>
                   <Pressable
                     accessibilityRole="button"
@@ -778,9 +708,7 @@ export default function Admin() {
                     onPress={() => openForm(product)}
                     style={{ minHeight: 38, justifyContent: 'center' }}
                   >
-                    <Text style={{ fontFamily: t.fonts.medium, fontSize: 12, color: t.colors.green }}>
-                      Sửa & tồn kho
-                    </Text>
+                    <Text style={{ fontFamily: t.fonts.medium, fontSize: 12, color: t.colors.green }}>Sửa & tồn kho</Text>
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
@@ -789,9 +717,7 @@ export default function Admin() {
                     onPress={() => router.push(`/admin-sizing/${product.id}`)}
                     style={{ minHeight: 38, justifyContent: 'center' }}
                   >
-                    <Text style={{ fontFamily: t.fonts.medium, fontSize: 12, color: t.colors.green }}>
-                      Bảng số đo & ảnh sau
-                    </Text>
+                    <Text style={{ fontFamily: t.fonts.medium, fontSize: 12, color: t.colors.green }}>Bảng số đo & ảnh sau</Text>
                   </Pressable>
                   <Pressable
                     accessibilityRole="button"
@@ -810,221 +736,243 @@ export default function Admin() {
         })
       )}
 
-      {/* MODAL THÊM / CHỈNH SỬA SẢN PHẨM */}
-      <Modal visible={showForm} animationType="slide" onRequestClose={() => { if (!busy) setShowForm(false); }}>
+      {/* MODAL THÊM / CHỈNH SỬA ĐẦY ĐỦ SẢN PHẨM */}
+      <Modal
+        visible={showForm}
+        animationType="slide"
+        onRequestClose={() => {
+          if (!busy) setShowForm(false);
+        }}
+      >
         <Screen>
           <Header
             title={editing ? 'Chỉnh sửa thiết kế' : 'Một thiết kế mới'}
             subtitle="SHOPFIT CATALOG"
-            right={<IconButton name="close" label="Đóng biểu mẫu" onPress={() => { if (!busy) setShowForm(false); }} />}
+            right={
+              <IconButton
+                name="close"
+                label="Đóng biểu mẫu"
+                onPress={() => {
+                  if (!busy) setShowForm(false);
+                }}
+              />
+            }
           />
           <View style={{ maxWidth: 640, width: '100%', alignSelf: 'center' }}>
             <Field label="Tên sản phẩm *" value={name} onChangeText={setName} placeholder="Ví dụ: Áo sơ mi lụa tơ tằm" />
-            <Field label="Giá bán (VND) *" value={price} onChangeText={setPrice} keyboardType="numeric" placeholder="Ví dụ: 350000" />
-
-            {!editing && (
-              <>
-                {/* 1. DANH MỤC + THÊM DANH MỤC */}
-                <View style={{ marginBottom: 18 }}>
-                  <View style={[s.between, { marginBottom: 8 }]}>
-                    <Text style={s.label}>Danh mục sản phẩm *</Text>
-                    <Pressable onPress={() => setShowAddCatModal(true)}>
-                      <Text style={{ fontFamily: t.fonts.bold, fontSize: 12, color: t.colors.green }}>
-                        + Thêm danh mục mới
-                      </Text>
-                    </Pressable>
-                  </View>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-                    {allCategories.map(c => (
-                      <Pressable
-                        key={c.name}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: c.name === category }}
-                        onPress={() => setCategory(c.name)}
-                        style={{
-                          paddingHorizontal: 16,
-                          minHeight: 44,
-                          borderRadius: 8,
-                          backgroundColor: c.name === category ? t.colors.green : t.colors.greenLight,
-                          justifyContent: 'center',
-                          alignItems: 'center',
-                        }}
-                      >
-                        <Text style={{
-                          fontFamily: t.fonts.medium,
-                          fontSize: 12,
-                          color: c.name === category ? 'white' : t.colors.green,
-                        }}>
-                          {c.name}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-                </View>
-
-                <Field label="Chất liệu *" value={material} onChangeText={setMaterial} placeholder="Cotton, Linen, Lụa..." />
+            <View style={{ flexDirection: wide ? 'row' : 'column', gap: wide ? 14 : 0 }}>
+              <View style={{ flex: 1 }}>
+                <Field label="Giá bán (VND) *" value={price} onChangeText={setPrice} keyboardType="numeric" placeholder="Ví dụ: 350000" />
+              </View>
+              <View style={{ flex: 1 }}>
                 <Field
-                  label="Mô tả sản phẩm *"
-                  value={description}
-                  onChangeText={setDescription}
-                  multiline
-                  style={{ minHeight: 90, textAlignVertical: 'top' }}
-                  placeholder="Mô tả ngắn gọn về thiết kế, phom dáng và dịp mặc phù hợp..."
+                  label="Giá gốc gạch ngang (tùy chọn)"
+                  value={originalPrice}
+                  onChangeText={setOriginalPrice}
+                  keyboardType="numeric"
+                  placeholder="Ví dụ: 450000"
                 />
+              </View>
+            </View>
 
-                {/* 2. CHỌN MÀU THÔNG MINH (PALETTE SWATCHES) */}
-                <View style={{
-                  backgroundColor: '#FAF9F6',
-                  borderWidth: 1,
-                  borderColor: '#E8E4DC',
-                  borderRadius: 12,
-                  padding: 14,
-                  marginBottom: 18,
-                  gap: 10,
-                }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Ionicons name="color-palette-outline" size={18} color={t.colors.green} />
-                    <Text style={{ fontFamily: t.fonts.bold, fontSize: 13, color: t.colors.ink }}>
-                      Màu sắc sản phẩm *
-                    </Text>
-                  </View>
-                  <Text style={[s.muted, { fontSize: 11 }]}>
-                    Chạm chọn nhanh màu phổ biến bên dưới hoặc tự nhập tên màu:
-                  </Text>
-
-                  {/* Swatches Grid */}
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                    {POPULAR_COLORS.map(c => {
-                      const isSelected = colorHex.toUpperCase() === c.hex.toUpperCase();
-                      return (
-                        <Pressable
-                          key={c.hex}
-                          onPress={() => handleColorSelect(c)}
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            gap: 6,
-                            paddingHorizontal: 10,
-                            paddingVertical: 6,
-                            borderRadius: 20,
-                            borderWidth: 1,
-                            borderColor: isSelected ? t.colors.green : '#D1D5DB',
-                            backgroundColor: isSelected ? t.colors.greenLight : 'white',
-                          }}
-                        >
-                          <View style={{
-                            width: 14,
-                            height: 14,
-                            borderRadius: 7,
-                            backgroundColor: c.hex,
-                            borderWidth: 1,
-                            borderColor: '#00000020',
-                          }} />
-                          <Text style={{
-                            fontSize: 11,
-                            fontFamily: isSelected ? t.fonts.bold : t.fonts.regular,
-                            color: isSelected ? t.colors.green : t.colors.ink,
-                          }}>
-                            {c.name}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-
-                  {/* Color Name Input */}
-                  <View style={{ marginTop: 6 }}>
-                    <Field
-                      label="Tên màu hiển thị cho khách"
-                      value={colorName}
-                      onChangeText={handleColorNameChange}
-                      placeholder="Trắng, Đen tuyền, Xanh rêu..."
-                    />
-                  </View>
-
-                  {/* Optional Hex Toggle */}
-                  <Pressable onPress={() => setShowHexInput(v => !v)}>
-                    <Text style={{ fontSize: 11, color: t.colors.muted, textDecorationLine: 'underline' }}>
-                      {showHexInput ? 'Ẩn mã màu HEX' : 'Tùy chỉnh mã HEX nâng cao'}
+            {/* 1. DANH MỤC */}
+            <View style={{ marginBottom: 18 }}>
+              <View style={[s.between, { marginBottom: 8 }]}>
+                <Text style={s.label}>Danh mục sản phẩm *</Text>
+                <Pressable accessibilityRole="button" onPress={() => setShowAddCatModal(true)}>
+                  <Text style={{ fontFamily: t.fonts.bold, fontSize: 12, color: t.colors.green }}>+ Thêm danh mục mới</Text>
+                </Pressable>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                {allCategories.map(c => (
+                  <Pressable
+                    key={c.name}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: c.name === category }}
+                    onPress={() => setCategory(c.name)}
+                    style={{
+                      paddingHorizontal: 16,
+                      minHeight: 44,
+                      borderRadius: 8,
+                      backgroundColor: c.name === category ? t.colors.green : t.colors.greenLight,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Text style={{ fontFamily: t.fonts.medium, fontSize: 12, color: c.name === category ? 'white' : t.colors.green }}>
+                      {c.name}
                     </Text>
                   </Pressable>
-                  {showHexInput && (
-                    <Field
-                      label="Mã màu HEX (tùy chỉnh)"
-                      value={colorHex}
-                      onChangeText={setColorHex}
-                      autoCapitalize="none"
-                      placeholder="#FFFFFF"
-                    />
-                  )}
-                </View>
+                ))}
+              </ScrollView>
+            </View>
 
-                {/* 3. NHẬP TỒN KHO RIÊNG TỪNG SIZE (MATRIX INVENTORY) */}
-                <View style={{
-                  backgroundColor: '#FAF9F6',
-                  borderWidth: 1,
-                  borderColor: '#E8E4DC',
-                  borderRadius: 12,
-                  padding: 14,
-                  marginBottom: 18,
-                  gap: 12,
-                }}>
-                  <View style={[s.between]}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Ionicons name="cube-outline" size={18} color={t.colors.green} />
-                      <Text style={{ fontFamily: t.fonts.bold, fontSize: 13, color: t.colors.ink }}>
-                        Tồn kho riêng theo Size *
-                      </Text>
-                    </View>
-                    <Text style={{ fontFamily: t.fonts.bold, fontSize: 12, color: t.colors.green }}>
-                      Tổng: {selectedSizes.reduce((sum, sz) => sum + (Number(sizeStocks[sz]) || 0), 0)} cái
-                    </Text>
-                  </View>
-                  <Text style={[s.muted, { fontSize: 11 }]}>
-                    Bật/tắt các size có hàng và nhập số lượng tồn kho riêng cho từng size:
+            <Field label="Chất liệu *" value={material} onChangeText={setMaterial} placeholder="Cotton, Linen, Lụa..." />
+            <Field
+              label="Mô tả sản phẩm *"
+              value={description}
+              onChangeText={setDescription}
+              multiline
+              style={{ minHeight: 90, textAlignVertical: 'top' }}
+              placeholder="Mô tả ngắn gọn về thiết kế, phom dáng và dịp mặc phù hợp..."
+            />
+
+            {/* 2. BẢNG CHỌN NHIỀU MÀU SẮC */}
+            <View
+              style={{
+                backgroundColor: '#FAF9F6',
+                borderWidth: 1,
+                borderColor: '#E8E4DC',
+                borderRadius: 12,
+                padding: 14,
+                marginBottom: 18,
+                gap: 10,
+              }}
+            >
+              <View style={s.between}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="color-palette-outline" size={18} color={t.colors.green} />
+                  <Text style={{ fontFamily: t.fonts.bold, fontSize: 13, color: t.colors.ink }}>
+                    Màu sắc sản phẩm ({selectedColors.length} màu) *
                   </Text>
+                </View>
+                <Pressable onPress={() => setShowCustomColor(v => !v)}>
+                  <Text style={{ fontSize: 11, color: t.colors.green, fontFamily: t.fonts.medium }}>
+                    {showCustomColor ? 'Ẩn màu riêng' : '+ Thêm màu riêng'}
+                  </Text>
+                </Pressable>
+              </View>
+              <Text style={[s.muted, { fontSize: 11 }]}>Chạm để bật/tắt một hoặc nhiều màu cho thiết kế này:</Text>
 
-                  {/* Size Toggle Pills */}
-                  <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
-                    {ALL_SIZES.map(sz => {
-                      const active = selectedSizes.includes(sz);
-                      return (
-                        <Pressable
-                          key={sz}
-                          onPress={() => toggleSize(sz)}
-                          style={{
-                            paddingHorizontal: 12,
-                            paddingVertical: 7,
-                            borderRadius: 6,
-                            borderWidth: 1,
-                            borderColor: active ? t.colors.green : '#D1D5DB',
-                            backgroundColor: active ? t.colors.green : 'white',
-                          }}
-                        >
-                          <Text style={{
-                            fontFamily: t.fonts.bold,
-                            fontSize: 12,
-                            color: active ? 'white' : t.colors.muted,
-                          }}>
-                            {sz}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {[...POPULAR_COLORS, ...selectedColors.filter(sc => !POPULAR_COLORS.some(pc => pc.name === sc.name))].map(c => {
+                  const isSelected = selectedColors.some(sc => sc.name === c.name);
+                  return (
+                    <Pressable
+                      key={c.name}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: isSelected }}
+                      onPress={() => toggleColorSwatch(c)}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 6,
+                        paddingHorizontal: 10,
+                        paddingVertical: 6,
+                        borderRadius: 20,
+                        borderWidth: 1,
+                        borderColor: isSelected ? t.colors.green : '#D1D5DB',
+                        backgroundColor: isSelected ? t.colors.greenLight : 'white',
+                      }}
+                    >
+                      <View
+                        style={{
+                          width: 14,
+                          height: 14,
+                          borderRadius: 7,
+                          backgroundColor: c.hex,
+                          borderWidth: 1,
+                          borderColor: '#00000020',
+                        }}
+                      />
+                      <Text
+                        style={{
+                          fontSize: 11,
+                          fontFamily: isSelected ? t.fonts.bold : t.fonts.regular,
+                          color: isSelected ? t.colors.green : t.colors.ink,
+                        }}
+                      >
+                        {c.name}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {showCustomColor && (
+                <View style={{ marginTop: 6, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#E5E1D8', gap: 8 }}>
+                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                    <View style={{ flex: 2 }}>
+                      <Field label="Tên màu mới" value={customColorName} onChangeText={setCustomColorName} placeholder="Xanh bơ, Đỏ rượu..." />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Field
+                        label="Mã HEX"
+                        value={customColorHex}
+                        onChangeText={setCustomColorHex}
+                        autoCapitalize="none"
+                        placeholder="#344E40"
+                      />
+                    </View>
                   </View>
+                  <Button variant="outline" onPress={addCustomColor} style={{ minHeight: 40, paddingVertical: 8 }}>
+                    Thêm màu vào sản phẩm
+                  </Button>
+                </View>
+              )}
+            </View>
 
-                  {/* Size Stock Inputs Matrix */}
-                  <View style={{ gap: 8, marginTop: 4 }}>
-                    {selectedSizes.map(sz => (
-                      <View key={sz} style={[s.between, { backgroundColor: 'white', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB' }]}>
-                        <Text style={{ fontFamily: t.fonts.bold, fontSize: 14, color: t.colors.ink, width: 60 }}>
-                          Size {sz}
+            {/* 3. TỒN KHO THEO MÀU / SIZE */}
+            <View
+              style={{
+                backgroundColor: '#FAF9F6',
+                borderWidth: 1,
+                borderColor: '#E8E4DC',
+                borderRadius: 12,
+                padding: 14,
+                marginBottom: 18,
+                gap: 12,
+              }}
+            >
+              <View style={[s.between]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="cube-outline" size={18} color={t.colors.green} />
+                  <Text style={{ fontFamily: t.fonts.bold, fontSize: 13, color: t.colors.ink }}>Tồn kho theo màu / size</Text>
+                </View>
+                <Text style={{ fontFamily: t.fonts.bold, fontSize: 12, color: t.colors.green }}>Tổng: {totalDraftStock} cái</Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+                {ALL_SIZES.map(sz => {
+                  const active = selectedSizes.includes(sz);
+                  return (
+                    <Pressable
+                      key={sz}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      onPress={() => toggleSize(sz)}
+                      style={{
+                        paddingHorizontal: 12,
+                        paddingVertical: 7,
+                        borderRadius: 6,
+                        borderWidth: 1,
+                        borderColor: active ? t.colors.green : '#D1D5DB',
+                        backgroundColor: active ? t.colors.green : 'white',
+                      }}
+                    >
+                      <Text style={{ fontFamily: t.fonts.bold, fontSize: 12, color: active ? 'white' : t.colors.muted }}>{sz}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <View style={{ gap: 8, marginTop: 4 }}>
+                {selectedColors.flatMap(c =>
+                  selectedSizes.map(sz => {
+                    const mKey = `${c.name}:${sz}`;
+                    return (
+                      <View
+                        key={mKey}
+                        style={[s.between, { backgroundColor: 'white', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB' }]}
+                      >
+                        <Text style={{ fontFamily: t.fonts.medium, fontSize: 13, color: t.colors.ink, flex: 1 }}>
+                          {c.name} / Size {sz}
                         </Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                           <TextInput
-                            accessibilityLabel={`Tồn kho size ${sz}`}
-                            value={sizeStocks[sz] ?? ''}
-                            onChangeText={v => setSizeStocks(prev => ({ ...prev, [sz]: v.replace(/\D/g, '') }))}
+                            accessibilityLabel={`Tồn kho ${c.name} size ${sz}`}
+                            value={stockMatrix[mKey] ?? '0'}
+                            onChangeText={v => setStockMatrix(prev => ({ ...prev, [mKey]: v.replace(/\D/g, '') }))}
                             keyboardType="numeric"
                             placeholder="0"
                             style={{
@@ -1040,235 +988,186 @@ export default function Admin() {
                               backgroundColor: '#FCFCFB',
                             }}
                           />
-                          <Text style={[s.muted, { fontSize: 12 }]}>sản phẩm</Text>
+                          <Text style={[s.muted, { fontSize: 12 }]}>cái</Text>
                         </View>
                       </View>
-                    ))}
-                  </View>
-
-                  {/* Batch Fill Tool */}
-                  <View style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 8,
-                    marginTop: 4,
-                    paddingTop: 10,
-                    borderTopWidth: 1,
-                    borderTopColor: '#EAE6DD',
-                  }}>
-                    <TextInput
-                      value={batchStock}
-                      onChangeText={setBatchStock}
-                      keyboardType="numeric"
-                      placeholder="Số lượng"
-                      style={{
-                        borderWidth: 1,
-                        borderColor: t.colors.line,
-                        borderRadius: 6,
-                        height: 36,
-                        width: 75,
-                        textAlign: 'center',
-                        fontSize: 12,
-                        backgroundColor: 'white',
-                      }}
-                    />
-                    <Button variant="outline" onPress={applyBatchStock} style={{ height: 36, minHeight: 36, paddingHorizontal: 12 }}>
-                      Áp dụng cho tất cả size
-                    </Button>
-                  </View>
-                </View>
-
-                {/* 4. CHỌN ẢNH SẢN PHẨM (NHIỀU ẢNH: CHÍNH DIỆN, MẶT SAU, CẬN CHẤT VẢI) */}
-                <Text style={[s.label, { marginTop: 10, fontSize: 13 }]}>1. Ảnh chính diện (Bắt buộc)</Text>
-                {photo && (
-                  <Image
-                    source={photo.uri}
-                    contentFit="contain"
-                    style={{ height: 200, width: '100%', borderRadius: 10, marginBottom: 10, backgroundColor: t.colors.sand }}
-                  />
+                    );
+                  })
                 )}
-                <Button
-                  variant="outline"
-                  icon="image-outline"
-                  onPress={() => void pick('front')}
-                  style={{ marginBottom: 10 }}
-                >
-                  {photo ? 'Đổi ảnh chính diện' : 'Chọn ảnh chính diện từ máy'}
-                </Button>
-                <Text style={[s.muted, { marginBottom: 16, fontSize: 11 }]}>
-                  Ảnh chụp thẳng, nền sáng gọn gàng để AI dựng phom thử đồ chuẩn xác nhất.
-                </Text>
+              </View>
 
-                {/* 2. Ảnh mặt sau */}
-                <View style={[s.between, { marginTop: 4 }]}>
-                  <Text style={[s.label, { fontSize: 13 }]}>2. Ảnh mặt sau (Tùy chọn cho AI xoay 4 góc)</Text>
-                  {backPhoto && (
-                    <Pressable onPress={() => setBackPhoto(null)}>
-                      <Text style={{ fontSize: 11, color: t.colors.error, fontFamily: t.fonts.medium }}>Xóa ảnh</Text>
-                    </Pressable>
-                  )}
-                </View>
-                {backPhoto && (
-                  <Image
-                    source={backPhoto.uri}
-                    contentFit="contain"
-                    style={{ height: 180, width: '100%', borderRadius: 10, marginBottom: 10, backgroundColor: t.colors.sand }}
-                  />
-                )}
-                <Button
-                  variant="outline"
-                  icon="sync-outline"
-                  onPress={() => void pick('back')}
-                  style={{ marginBottom: 10 }}
-                >
-                  {backPhoto ? 'Đổi ảnh mặt sau' : '+ Thêm ảnh chi tiết mặt sau'}
+              <View
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 8,
+                  marginTop: 4,
+                  paddingTop: 10,
+                  borderTopWidth: 1,
+                  borderTopColor: '#EAE6DD',
+                }}
+              >
+                <TextInput
+                  value={batchStock}
+                  onChangeText={setBatchStock}
+                  keyboardType="numeric"
+                  placeholder="Số lượng"
+                  style={{
+                    borderWidth: 1,
+                    borderColor: t.colors.line,
+                    borderRadius: 6,
+                    height: 36,
+                    width: 80,
+                    textAlign: 'center',
+                    fontSize: 12,
+                    backgroundColor: 'white',
+                    color: t.colors.ink,
+                  }}
+                />
+                <Button variant="outline" onPress={applyBatchStock} style={{ height: 36, minHeight: 36, paddingHorizontal: 12 }}>
+                  Điền nhanh tất cả
                 </Button>
-                <Text style={[s.muted, { marginBottom: 16, fontSize: 11 }]}>
-                  Giúp AI tạo góc nhìn phía sau chân thực khi khách xoay lưng trong phòng thử ảo.
-                </Text>
+              </View>
+            </View>
 
-                {/* 3. Ảnh cận chất vải */}
-                <View style={[s.between, { marginTop: 4 }]}>
-                  <Text style={[s.label, { fontSize: 13 }]}>3. Ảnh cận chất vải / đường may (Tùy chọn)</Text>
-                  {detailPhoto && (
-                    <Pressable onPress={() => setDetailPhoto(null)}>
-                      <Text style={{ fontSize: 11, color: t.colors.error, fontFamily: t.fonts.medium }}>Xóa ảnh</Text>
-                    </Pressable>
-                  )}
-                </View>
-                {detailPhoto && (
-                  <Image
-                    source={detailPhoto.uri}
-                    contentFit="contain"
-                    style={{ height: 180, width: '100%', borderRadius: 10, marginBottom: 10, backgroundColor: t.colors.sand }}
-                  />
-                )}
-                <Button
-                  variant="outline"
-                  icon="search-outline"
-                  onPress={() => void pick('detail')}
-                  style={{ marginBottom: 10 }}
-                >
-                  {detailPhoto ? 'Đổi ảnh cận chất vải' : '+ Thêm ảnh cận chất vải / đường may'}
-                </Button>
-                <Text style={[s.muted, { marginBottom: 20, fontSize: 11 }]}>
-                  Khách hàng có thể bấm xem chi tiết bề mặt vải và đường kim mũi chỉ.
-                </Text>
-              </>
+            {/* 4. 3 GÓC ẢNH SẢN PHẨM (CHÍNH DIỆN, MẶT SAU, CẬN CHẤT VẢI) */}
+            <Text style={[s.label, { marginTop: 6, fontSize: 13 }]}>1. Ảnh chính diện {!editing && '(Bắt buộc)'}</Text>
+            {(photo?.uri || editing?.image_url) && (
+              <Image
+                source={photo ? photo.uri : mediaUrl(editing?.image_url)}
+                contentFit="contain"
+                style={{ height: 190, width: '100%', borderRadius: 10, marginBottom: 10, backgroundColor: t.colors.sand }}
+              />
             )}
+            <Button variant="outline" icon="image-outline" onPress={() => void pick('front')} style={{ marginBottom: 14 }}>
+              {photo || editing ? 'Đổi ảnh chính diện' : 'Chọn ảnh chính diện từ máy'}
+            </Button>
 
-            {editing && (
-              <>
-                <Text style={[s.label, { marginTop: 8 }]}>Tồn kho theo màu / size</Text>
-                {variants.map((v, index) => (
-                  <View key={`${v.size}-${v.color}`} style={[s.between, { marginBottom: 10 }]}>
-                    <Text style={s.text}>{v.color} / {v.size}</Text>
-                    <TextInput
-                      accessibilityLabel={`Tồn kho ${v.color} size ${v.size}`}
-                      value={String(v.stock)}
-                      onChangeText={value =>
-                        setVariants(all =>
-                          all.map((item, i) =>
-                            i === index
-                              ? { ...item, stock: Math.max(0, Math.min(10000, Number(value.replace(/\D/g, '')) || 0)) }
-                              : item
-                          )
-                        )
-                      }
-                      keyboardType="numeric"
-                      style={{
-                        borderWidth: 1,
-                        borderColor: t.colors.line,
-                        borderRadius: 7,
-                        height: 48,
-                        width: 85,
-                        textAlign: 'center',
-                        fontFamily: t.fonts.regular,
-                        color: t.colors.ink,
-                      }}
-                    />
-                  </View>
-                ))}
-              </>
+            <View style={[s.between, { marginTop: 4 }]}>
+              <Text style={[s.label, { fontSize: 13 }]}>2. Ảnh mặt sau (Tùy chọn cho AI xoay góc lưng)</Text>
+              {(backPhoto || existingBackUrl) && (
+                <Pressable
+                  onPress={() => {
+                    setBackPhoto(null);
+                    setExistingBackUrl(null);
+                  }}
+                >
+                  <Text style={{ fontSize: 11, color: t.colors.error, fontFamily: t.fonts.medium }}>Xóa ảnh</Text>
+                </Pressable>
+              )}
+            </View>
+            {(backPhoto?.uri || existingBackUrl) && (
+              <Image
+                source={backPhoto ? backPhoto.uri : mediaUrl(existingBackUrl)}
+                contentFit="contain"
+                style={{ height: 170, width: '100%', borderRadius: 10, marginBottom: 10, backgroundColor: t.colors.sand }}
+              />
             )}
+            <Button variant="outline" icon="sync-outline" onPress={() => void pick('back')} style={{ marginBottom: 14 }}>
+              {backPhoto || existingBackUrl ? 'Đổi ảnh mặt sau' : '+ Thêm ảnh chi tiết mặt sau'}
+            </Button>
+
+            <View style={[s.between, { marginTop: 4 }]}>
+              <Text style={[s.label, { fontSize: 13 }]}>3. Ảnh cận chất vải / đường may (Tùy chọn)</Text>
+              {(detailPhoto || existingDetailUrl) && (
+                <Pressable
+                  onPress={() => {
+                    setDetailPhoto(null);
+                    setExistingDetailUrl(null);
+                  }}
+                >
+                  <Text style={{ fontSize: 11, color: t.colors.error, fontFamily: t.fonts.medium }}>Xóa ảnh</Text>
+                </Pressable>
+              )}
+            </View>
+            {(detailPhoto?.uri || existingDetailUrl) && (
+              <Image
+                source={detailPhoto ? detailPhoto.uri : mediaUrl(existingDetailUrl)}
+                contentFit="contain"
+                style={{ height: 170, width: '100%', borderRadius: 10, marginBottom: 10, backgroundColor: t.colors.sand }}
+              />
+            )}
+            <Button variant="outline" icon="search-outline" onPress={() => void pick('detail')} style={{ marginBottom: 18 }}>
+              {detailPhoto || existingDetailUrl ? 'Đổi ảnh cận chất vải' : '+ Thêm ảnh cận chất vải / đường may'}
+            </Button>
 
             <ErrorMessage message={formError} />
-            <Button
-              loading={busy}
-              icon="checkmark"
-              onPress={() => void save()}
-              style={{ marginTop: 12, marginBottom: 30 }}
-            >
+            <Button loading={busy} icon="checkmark" onPress={() => void save()} style={{ marginTop: 8, marginBottom: 30 }}>
               {editing ? 'Lưu thay đổi' : 'Thêm thiết kế vào bộ sưu tập'}
             </Button>
           </View>
         </Screen>
+        <ToastOverlay />
       </Modal>
 
       {/* MODAL THÊM DANH MỤC MỚI KÈM ÁNH XẠ AI */}
       <Modal visible={showAddCatModal} transparent animationType="fade" onRequestClose={() => setShowAddCatModal(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-          <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 22, maxWidth: 440, width: '100%', gap: 14 }}>
-            <View style={[s.between]}>
-              <Text style={{ fontFamily: t.fonts.bold, fontSize: 18, color: t.colors.ink }}>
-                Thêm danh mục mới
-              </Text>
-              <IconButton name="close" label="Đóng" onPress={() => setShowAddCatModal(false)} />
-            </View>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <View style={{ backgroundColor: 'white', borderRadius: 16, padding: 22, maxWidth: 440, width: '100%', gap: 14 }}>
+              <View style={[s.between]}>
+                <Text style={{ fontFamily: t.fonts.bold, fontSize: 18, color: t.colors.ink }}>Thêm danh mục mới</Text>
+                <IconButton name="close" label="Đóng" onPress={() => setShowAddCatModal(false)} />
+              </View>
 
-            <Field
-              label="Tên danh mục *"
-              value={newCatName}
-              onChangeText={setNewCatName}
-              placeholder="Ví dụ: Đầm dạ hội, Áo blazer, Quần short..."
-            />
+              <Field label="Tên danh mục *" value={newCatName} onChangeText={setNewCatName} placeholder="Ví dụ: Đầm dạ hội, Áo blazer..." />
 
-            <View>
-              <Text style={s.label}>Nhóm phom dáng thử đồ AI *</Text>
-              <Text style={[s.muted, { fontSize: 11, marginBottom: 8 }]}>
-                Giúp Gemini AI hiểu đúng vị trí trang phục khi khách hàng thử đồ:
-              </Text>
+              <View>
+                <Text style={s.label}>Nhóm phom dáng thử đồ AI *</Text>
+                <Text style={[s.muted, { fontSize: 11, marginBottom: 8 }]}>
+                  Giúp Gemini AI hiểu đúng vị trí trang phục khi khách hàng thử đồ:
+                </Text>
 
-              {([
-                ['tops', '👔 Thân trên (Áo, Sơ mi, Blazer, Áo len...)'],
-                ['bottoms', '👖 Thân dưới (Quần jean, Quần âu, Chân váy...)'],
-                ['one-pieces', '👗 Toàn thân (Váy, Đầm liền, Jumpsuit, Set bộ...)'],
-              ] as const).map(([val, desc]) => (
-                <Pressable
-                  key={val}
-                  onPress={() => setNewCatTryon(val)}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    padding: 10,
-                    borderRadius: 8,
-                    borderWidth: 1,
-                    borderColor: newCatTryon === val ? t.colors.green : '#E5E7EB',
-                    backgroundColor: newCatTryon === val ? t.colors.greenLight : 'white',
-                    marginBottom: 6,
-                  }}
-                >
-                  <Text style={{
-                    fontSize: 12,
-                    fontFamily: newCatTryon === val ? t.fonts.bold : t.fonts.regular,
-                    color: newCatTryon === val ? t.colors.green : t.colors.ink,
-                  }}>
-                    {desc}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
+                {(
+                  [
+                    ['tops', '👔 Thân trên (Áo, Sơ mi, Blazer, Áo len...)'],
+                    ['bottoms', '👖 Thân dưới (Quần jean, Quần âu, Chân váy...)'],
+                    ['one-pieces', '👗 Toàn thân (Váy, Đầm liền, Jumpsuit, Set bộ...)'],
+                  ] as const
+                ).map(([val, desc]) => (
+                  <Pressable
+                    key={val}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: newCatTryon === val }}
+                    onPress={() => setNewCatTryon(val)}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      padding: 10,
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: newCatTryon === val ? t.colors.green : '#E5E7EB',
+                      backgroundColor: newCatTryon === val ? t.colors.greenLight : 'white',
+                      marginBottom: 6,
+                    }}
+                  >
+                    <Ionicons
+                      name={newCatTryon === val ? 'radio-button-on' : 'radio-button-off'}
+                      size={18}
+                      color={newCatTryon === val ? t.colors.green : t.colors.muted}
+                      style={{ marginRight: 8 }}
+                    />
+                    <Text
+                      style={{
+                        fontFamily: newCatTryon === val ? t.fonts.bold : t.fonts.regular,
+                        fontSize: 12,
+                        color: t.colors.ink,
+                        flex: 1,
+                      }}
+                    >
+                      {desc}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
 
-            <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
-              <Button variant="outline" onPress={() => setShowAddCatModal(false)} style={{ flex: 1 }}>
-                Hủy
+              <Button onPress={() => void handleCreateCategory()} icon="checkmark">
+                Xác nhận thêm danh mục
               </Button>
-              <Button onPress={handleCreateCategory} style={{ flex: 1 }}>
-                Tạo danh mục
-              </Button>
             </View>
+            <ToastOverlay />
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </Screen>
   );

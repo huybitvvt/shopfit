@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import shutil
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +18,8 @@ INTEGRITY_ERRORS = (sqlite3.IntegrityError, psycopg.IntegrityError)
 TABLES = (
     "users", "sessions", "products", "variants", "orders", "order_items", "tryons",
     "body_profiles", "photo_checks", "tryon_evaluations", "wardrobe", "fit_reviews",
-    "ai_calls", "retry_requests", "password_resets",
+    "ai_calls", "retry_requests", "password_resets", "reports",
+    "token_packages", "payment_transactions", "user_vouchers",
 )
 POSTGRES_SCHEMA = Path(__file__).resolve().parents[2] / "supabase" / "migrations" / "20261110090000_shopfit.sql"
 
@@ -61,8 +63,10 @@ class Database:
         self.path = settings.data_dir / "shopfit.sqlite3"
         self.settings = settings
         self.postgres = bool(settings.database_url)
+        self._pool_lock = threading.Lock()
         self.pool = ConnectionPool(
             settings.database_url, min_size=1, max_size=6, open=False, timeout=20,
+            max_lifetime=300, max_idle=120, check=ConnectionPool.check_connection,
             kwargs={"row_factory": postgres_row, "prepare_threshold": None, "connect_timeout": 15,
                     "options": f"-c search_path={settings.database_schema}", "application_name": "shopfit"},
         ) if self.postgres else None
@@ -71,7 +75,9 @@ class Database:
     def connect(self):
         if self.pool is not None:
             if self.pool.closed:
-                self.pool.open(wait=True, timeout=20)
+                with self._pool_lock:
+                    if self.pool.closed:
+                        self.pool.open(wait=True, timeout=20)
             with self.pool.connection() as conn:
                 yield PostgresConnection(conn)
             return
@@ -134,8 +140,9 @@ class Database:
                 stock INTEGER NOT NULL CHECK(stock >= 0), PRIMARY KEY (product_id, size, color)
             );
             CREATE TABLE IF NOT EXISTS orders (
-                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), customer_name TEXT NOT NULL,
+                id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, customer_name TEXT NOT NULL,
                 phone TEXT NOT NULL, address TEXT NOT NULL, note TEXT NOT NULL, total INTEGER NOT NULL,
+                subtotal INTEGER, discount_amount INTEGER NOT NULL DEFAULT 0, voucher_code TEXT,
                 status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS order_items (
@@ -167,21 +174,31 @@ class Database:
         seed_charts = "size_chart" not in product_columns
         if seed_charts:
             conn.execute("ALTER TABLE products ADD COLUMN size_chart TEXT NOT NULL DEFAULT '{}'")
-        order_columns = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
-        for name in ("request_key", "request_fingerprint"):
+        order_info = list(conn.execute("PRAGMA table_info(orders)"))
+        order_columns = {r[1] for r in order_info}
+        for name, decl in {
+            "request_key": "TEXT",
+            "request_fingerprint": "TEXT",
+            "subtotal": "INTEGER",
+            "discount_amount": "INTEGER NOT NULL DEFAULT 0",
+            "voucher_code": "TEXT",
+        }.items():
             if name not in order_columns:
-                conn.execute(f"ALTER TABLE orders ADD COLUMN {name} TEXT")
+                conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {decl}")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_order_request ON orders(user_id,request_key) WHERE request_key IS NOT NULL")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at)")
         columns = {r[1] for r in conn.execute("PRAGMA table_info(tryons)")}
         for name, declaration in {
             "size": "TEXT", "body_snapshot": "TEXT", "fit_snapshot": "TEXT", "photo_check": "TEXT",
             "views": "TEXT NOT NULL DEFAULT '{}'", "retry_count": "INTEGER NOT NULL DEFAULT 0",
+            "quota_source": "TEXT NOT NULL DEFAULT 'daily'",
             "request_key": "TEXT", "request_fingerprint": "TEXT", "updated_at": "TEXT",
         }.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE tryons ADD COLUMN {name} {declaration}")
         conn.executescript("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_tryon_request ON tryons(user_id,request_key) WHERE request_key IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_tryons_product ON tryons(product_id, status);
             CREATE TABLE IF NOT EXISTS body_profiles (
                 user_id TEXT PRIMARY KEY REFERENCES users(id), profile TEXT NOT NULL, updated_at TEXT NOT NULL
             );
@@ -227,7 +244,7 @@ class Database:
                 active INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS payment_transactions (
-                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+                id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
                 package_id TEXT NOT NULL REFERENCES token_packages(id), amount INTEGER NOT NULL,
                 tryons INTEGER NOT NULL, payment_code TEXT UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
                 qr_url TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, completed_at TEXT
@@ -235,7 +252,7 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_trans_user ON payment_transactions(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_trans_code ON payment_transactions(payment_code);
             CREATE TABLE IF NOT EXISTS user_vouchers (
-                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), code TEXT NOT NULL,
+                id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, code TEXT NOT NULL,
                 discount_amount INTEGER NOT NULL, min_order INTEGER NOT NULL DEFAULT 0,
                 used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
             );
@@ -268,13 +285,13 @@ class Database:
                     conn.execute("INSERT INTO variants VALUES (?,?,?,?) ON CONFLICT DO NOTHING", (p["id"], size, color["name"], 12))
             if seed_charts:
                 conn.execute("UPDATE products SET size_chart=? WHERE id=?", (json.dumps(demo_chart(p)), p["id"]))
-        # Create/ensure shop owner account: tk: chushop, mk: 123
+        # Create/ensure shop owner account: tk: chushop, mk: 123 (never overwrite an updated password on restart)
         admin_uid = "admin-chushop"
-        admin_pwd_hash = hash_password("123")
         existing_admin = conn.execute("SELECT id FROM users WHERE email='chushop' OR id='admin-chushop'").fetchone()
         if existing_admin:
-            conn.execute("UPDATE users SET email='chushop', password_hash=?, role='admin' WHERE id=?", (admin_pwd_hash, existing_admin[0]))
+            conn.execute("UPDATE users SET role='admin' WHERE id=?", (existing_admin[0],))
         else:
+            admin_pwd_hash = hash_password("123")
             conn.execute(
                 "INSERT INTO users (id, name, email, password_hash, role, vip_tier, starter_tryons_left, total_spent, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 (admin_uid, "Chủ Shop", "chushop", admin_pwd_hash, "admin", "diamond", 999, 10000000, now())
@@ -301,16 +318,31 @@ class Database:
             ''', (pid, name, price, tryons, tag, voucher))
         # The service recovers durable queued jobs and pauses uncertain paid calls after startup.
 
-    def product(self, conn, row):
+    def _serialize_product(self, row, variants_list):
         p = dict(row)
         p["colors"] = json.loads(p["colors"])
         p["sizes"] = json.loads(p["sizes"])
         p["featured"] = bool(p["featured"])
         p["active"] = bool(p["active"])
-        p["variants"] = [dict(v) for v in conn.execute("SELECT size,color,stock FROM variants WHERE product_id=?", (p["id"],))]
+        p["variants"] = variants_list
         p["stock"] = sum(v["stock"] for v in p["variants"])
         chart = json.loads(p["size_chart"])
         p["size_chart"] = SizeChart(rows=[]).model_dump() if not chart else chart
         p["back_image_url"] = p["size_chart"].get("back_image_url")
         p["detail_image_url"] = p["size_chart"].get("detail_image_url")
         return p
+
+    def product(self, conn, row):
+        variants = [dict(v) for v in conn.execute("SELECT size,color,stock FROM variants WHERE product_id=?", (row["id"],))]
+        return self._serialize_product(row, variants)
+
+    def products_bulk(self, conn, rows):
+        rows = list(rows)
+        if not rows:
+            return []
+        ids = [r["id"] for r in rows]
+        placeholders = ",".join("?" for _ in ids)
+        by_product: dict[str, list[dict]] = {pid: [] for pid in ids}
+        for v in conn.execute(f"SELECT product_id,size,color,stock FROM variants WHERE product_id IN ({placeholders})", tuple(ids)):
+            by_product[v["product_id"]].append({"size": v["size"], "color": v["color"], "stock": v["stock"]})
+        return [self._serialize_product(r, by_product[r["id"]]) for r in rows]

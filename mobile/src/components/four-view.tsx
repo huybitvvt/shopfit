@@ -1,12 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import { useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, Share, Text, TextInput, View } from 'react-native';
 import { mediaUrl, request } from '../api';
 import { useStore } from '../store';
 import { theme as t } from '../theme';
 import type { Angle, TryOn } from '../types';
-import { Button, IconButton, s } from './ui';
+import { Button, IconButton, ToastOverlay, s } from './ui';
 
 export const angles: Angle[] = ['front', 'left', 'back', 'right'];
 export const angleLabels: Record<Angle, string> = { front: 'Trước', left: 'Trái', back: 'Sau', right: 'Phải' };
@@ -136,12 +136,37 @@ export function FourView({ job }: { job: TryOn }) {
         </View>
       )}
 
-      {/* Action Row: Compare & Report Button */}
+      {/* Action Row: Compare, Download/Share & Report Button */}
       {view?.url && (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Button variant="outline" style={{ flex: 1 }} onPress={() => setOriginal(v => !v)}>
             {original ? 'Xem ảnh sau khi thử' : 'So sánh với ảnh gốc'}
           </Button>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Tải hoặc chia sẻ ảnh thử đồ"
+            onPress={() => {
+              const fullUrl = mediaUrl(view.url);
+              if (Platform.OS === 'web') {
+                void Linking.openURL(fullUrl);
+              } else {
+                void Share.share({ message: `Ảnh thử đồ AI trên ShopFit Studio: ${fullUrl}`, url: fullUrl });
+              }
+            }}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingHorizontal: 14,
+              minHeight: 52,
+              borderRadius: 9,
+              borderWidth: 1,
+              borderColor: '#E2DDD6',
+              backgroundColor: pressed ? '#F5F2EC' : 'transparent',
+            })}
+          >
+            <Ionicons name="download-outline" size={18} color={t.colors.green} />
+          </Pressable>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Báo cáo ảnh AI này"
@@ -151,7 +176,7 @@ export function FourView({ job }: { job: TryOn }) {
               alignItems: 'center',
               justifyContent: 'center',
               gap: 6,
-              paddingHorizontal: 16,
+              paddingHorizontal: 14,
               minHeight: 52,
               borderRadius: 9,
               borderWidth: 1,
@@ -171,82 +196,87 @@ export function FourView({ job }: { job: TryOn }) {
 
       {/* Report Modal */}
       <Modal visible={reporting} transparent animationType="fade" onRequestClose={() => setReporting(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-          <View style={{ width: '100%', maxWidth: 440, backgroundColor: 'white', borderRadius: 16, padding: 24, gap: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 6 }}>
-            <View style={[s.between]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="flag" size={20} color="#D9383A" />
-                <Text style={{ fontSize: 16, fontFamily: t.fonts.bold, color: t.colors.ink }}>Báo cáo nội dung AI</Text>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+            <View style={{ width: '100%', maxWidth: 440, backgroundColor: 'white', borderRadius: 16, padding: 24, gap: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 6 }}>
+              <View style={[s.between]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="flag" size={20} color="#D9383A" />
+                  <Text style={{ fontSize: 16, fontFamily: t.fonts.bold, color: t.colors.ink }}>Báo cáo nội dung AI</Text>
+                </View>
+                <Pressable accessibilityRole="button" accessibilityLabel="Đóng báo cáo" onPress={() => setReporting(false)} hitSlop={8}>
+                  <Ionicons name="close" size={22} color={t.colors.muted} />
+                </Pressable>
               </View>
-              <Pressable onPress={() => setReporting(false)} hitSlop={8}>
-                <Ionicons name="close" size={22} color={t.colors.muted} />
-              </Pressable>
+
+              <Text style={[s.muted, { fontSize: 13, lineHeight: 19 }]}>
+                Apple & ShopFit cam kết loại bỏ nội dung không phù hợp. Vui lòng chọn lý do khiếu nại:
+              </Text>
+
+              <View style={{ gap: 8 }}>
+                {REPORT_REASONS.map(reason => {
+                  const active = selectedReason === reason;
+                  return (
+                    <Pressable
+                      key={reason}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      onPress={() => setSelectedReason(reason)}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: 12,
+                        borderRadius: 8,
+                        backgroundColor: active ? t.colors.greenLight : '#F8F6F2',
+                        borderWidth: 1,
+                        borderColor: active ? t.colors.green : '#ECE6DC',
+                      }}
+                    >
+                      <Ionicons
+                        name={active ? 'radio-button-on' : 'radio-button-off'}
+                        size={18}
+                        color={active ? t.colors.green : t.colors.muted}
+                      />
+                      <Text style={{ flex: 1, fontSize: 13, color: active ? t.colors.green : t.colors.ink, fontFamily: active ? t.fonts.medium : t.fonts.regular }}>
+                        {reason}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <TextInput
+                placeholder="Mô tả thêm chi tiết (tùy chọn)..."
+                placeholderTextColor={t.colors.muted}
+                value={details}
+                onChangeText={setDetails}
+                maxLength={500}
+                multiline
+                style={{
+                  borderWidth: 1,
+                  borderColor: t.colors.line,
+                  borderRadius: 8,
+                  padding: 12,
+                  minHeight: 70,
+                  textAlignVertical: 'top',
+                  fontSize: 13,
+                  color: t.colors.ink,
+                }}
+              />
+
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <Button variant="outline" style={{ flex: 1 }} onPress={() => setReporting(false)}>
+                  Hủy
+                </Button>
+                <Button style={{ flex: 1 }} loading={submitting} onPress={() => void handleSendReport()}>
+                  Gửi báo cáo
+                </Button>
+              </View>
             </View>
-
-            <Text style={[s.muted, { fontSize: 13, lineHeight: 19 }]}>
-              Apple & ShopFit cam kết loại bỏ nội dung không phù hợp. Vui lòng chọn lý do khiếu nại:
-            </Text>
-
-            <View style={{ gap: 8 }}>
-              {REPORT_REASONS.map((reason) => {
-                const active = selectedReason === reason;
-                return (
-                  <Pressable
-                    key={reason}
-                    onPress={() => setSelectedReason(reason)}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 10,
-                      padding: 12,
-                      borderRadius: 8,
-                      backgroundColor: active ? t.colors.greenLight : '#F8F6F2',
-                      borderWidth: 1,
-                      borderColor: active ? t.colors.green : '#ECE6DC',
-                    }}
-                  >
-                    <Ionicons
-                      name={active ? 'radio-button-on' : 'radio-button-off'}
-                      size={18}
-                      color={active ? t.colors.green : t.colors.muted}
-                    />
-                    <Text style={{ flex: 1, fontSize: 13, color: active ? t.colors.green : t.colors.ink, fontFamily: active ? t.fonts.medium : t.fonts.regular }}>
-                      {reason}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <TextInput
-              placeholder="Mô tả thêm chi tiết (tùy chọn)..."
-              placeholderTextColor={t.colors.muted}
-              value={details}
-              onChangeText={setDetails}
-              maxLength={500}
-              multiline
-              style={{
-                borderWidth: 1,
-                borderColor: t.colors.line,
-                borderRadius: 8,
-                padding: 12,
-                minHeight: 70,
-                textAlignVertical: 'top',
-                fontSize: 13,
-                color: t.colors.ink,
-              }}
-            />
-
-            <View style={{ flexDirection: 'row', gap: 10 }}>
-              <Button variant="outline" style={{ flex: 1 }} onPress={() => setReporting(false)}>
-                Hủy
-              </Button>
-              <Button style={{ flex: 1 }} loading={submitting} onPress={() => void handleSendReport()}>
-                Gửi báo cáo
-              </Button>
-            </View>
+            <ToastOverlay />
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );

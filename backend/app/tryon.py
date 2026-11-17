@@ -136,10 +136,12 @@ class TryOnService:
         self.inflight = set()
         self.lock = threading.Lock()
         self.stopped = threading.Event()
+        self.wakeup = threading.Event()
         self.dispatcher = None
 
     def close(self):
         self.stopped.set()
+        self.wakeup.set()
         if self.dispatcher:
             self.dispatcher.join(timeout=2)
         self.pool.shutdown(wait=True, cancel_futures=False)
@@ -177,13 +179,18 @@ class TryOnService:
             self.db.begin_write(conn)
             conn.execute("UPDATE ai_calls SET status='unknown',completed_at=? WHERE status='started'", (now(),))
             for row in conn.execute("SELECT * FROM tryons WHERE status IN ('queued','processing') AND deleted=0").fetchall():
+                if row["photo_path"] and not Path(row["photo_path"]).is_file():
+                    self.storage.get_private(Path(row["photo_path"]).name)
                 views = json.loads(row["views"])
                 for view in views.values():
+                    if view.get("path") and not Path(view["path"]).is_file():
+                        self.storage.get_private(Path(view["path"]).name)
                     if view.get("path") and not Path(view["path"]).is_file():
                         view.update(status="failed", error="Ảnh đã lưu không còn trên máy chủ.")
                         view.pop("path", None)
                 uncertain = any(v.get("status") == "processing" for v in views.values())
                 complete = sum(v.get("status") == "completed" for v in views.values())
+                target_count = len(views) or len(self.settings.tryon_angles)
                 if uncertain or not row["fit_snapshot"]:
                     for view in views.values():
                         if view.get("status") == "processing":
@@ -191,7 +198,7 @@ class TryOnService:
                     status = "partial" if complete else "failed"
                     error = "Lượt thử bị gián đoạn. Các ảnh đã có được giữ; góc chưa rõ kết quả không tự gọi lại."
                 else:
-                    status, error = ("completed", None) if complete == 4 else ("queued", None)
+                    status, error = ("completed", None) if complete == target_count else ("queued", None)
                 conn.execute("UPDATE tryons SET status=?,views=?,error=?,result_path=?,updated_at=? WHERE id=?",
                              (status, json.dumps(views), error, views.get("front", {}).get("path"), now(), row["id"]))
         self._dispatch()
@@ -199,7 +206,11 @@ class TryOnService:
         self.dispatcher.start()
 
     def _dispatch_loop(self):
-        while not self.stopped.wait(1):
+        while not self.stopped.is_set():
+            self.wakeup.wait(15)
+            self.wakeup.clear()
+            if self.stopped.is_set():
+                break
             try:
                 self._dispatch()
             except Exception as exc:
@@ -225,7 +236,7 @@ class TryOnService:
                 self.capacity.release()
                 return
 
-    def start(self, user_id: str, product: dict, color: str, photo: bytes, size: str, profile: dict, photo_check: dict, request_key=None) -> str:
+    def start(self, user_id: str, product: dict, color: str, photo: bytes, size: str, profile: dict, photo_check: dict, request_key=None, daily_tier_limit: int | None = None) -> str:
         if not self.engine.enabled:
             raise HTTPException(503, "Phòng thử AI chưa được cấu hình. Vui lòng liên hệ shop hoặc quay lại sau.")
         job_id = uuid.uuid4().hex
@@ -237,27 +248,46 @@ class TryOnService:
                 existing = self._existing(conn.execute("SELECT id,deleted,request_fingerprint FROM tryons WHERE user_id=? AND request_key=?", (user_id, request_key)).fetchone(), fingerprint)
                 if existing:
                     return existing
+                today = now()[:10]
                 active = conn.execute("SELECT count(*) FROM tryons WHERE user_id=? AND status IN ('queued','processing')", (user_id,)).fetchone()[0]
-                daily = conn.execute("SELECT coalesce(sum(1+retry_count),0) FROM tryons WHERE user_id=? AND substr(created_at,1,10)=?", (user_id, now()[:10])).fetchone()[0]
+                daily = conn.execute("SELECT coalesce(sum(1+retry_count),0) FROM tryons WHERE user_id=? AND created_at LIKE ?", (user_id, f"{today}%")).fetchone()[0]
                 if active >= 2:
                     raise HTTPException(429, "Bạn đang có 2 lượt thử được xử lý. Vui lòng chờ kết quả.")
                 if daily >= self.settings.daily_limit:
                     raise HTTPException(429, "Bạn đã dùng hết lượt thử hôm nay. Vui lòng quay lại vào ngày mai.")
                 if conn.execute("SELECT count(*) FROM tryons WHERE status IN ('queued','processing')").fetchone()[0] >= 24:
                     raise HTTPException(429, "Phòng thử đang đông. Vui lòng thử lại sau ít phút.")
+
+                quota_source = "daily"
+                if daily_tier_limit is not None:
+                    u_row = conn.execute("SELECT COALESCE(starter_tryons_left, 0) FROM users WHERE id=?", (user_id,)).fetchone()
+                    starter_left = u_row[0] if u_row else 0
+                    daily_free_used = conn.execute(
+                        "SELECT count(*) FROM tryons WHERE user_id=? AND created_at LIKE ? AND quota_source='daily' AND status != 'failed'",
+                        (user_id, f"{today}%")
+                    ).fetchone()[0]
+                    if daily_free_used < daily_tier_limit:
+                        quota_source = "daily"
+                    elif starter_left > 0:
+                        quota_source = "starter"
+                        conn.execute("UPDATE users SET starter_tryons_left = starter_tryons_left - 1 WHERE id=?", (user_id,))
+                    else:
+                        raise HTTPException(429, f"Bạn đã sử dụng hết hạn mức thử đồ hôm nay ({daily_free_used}/{daily_tier_limit} lượt). Vui lòng nạp thêm lượt hoặc quay lại vào ngày mai nhé!")
+
                 path.write_bytes(photo)
                 self.storage.put_private(f"{job_id}-photo.jpg", photo)
                 fit = {"advice": advise(product, profile, color), "selected_size": size,
                        "garment": next((r for r in product["size_chart"]["rows"] if r["size"] == size), None),
                        "chart_verified": product["size_chart"]["verified"], "product": product}
                 conn.execute("""INSERT INTO tryons (id,user_id,product_id,status,photo_path,color,image_secret,model,created_at,
-                    size,body_snapshot,fit_snapshot,photo_check,views,request_key,request_fingerprint,updated_at) VALUES (?,?,?,'queued',?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    size,body_snapshot,fit_snapshot,photo_check,views,quota_source,request_key,request_fingerprint,updated_at) VALUES (?,?,?,'queued',?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (job_id, user_id, product["id"], str(path), color, secrets.token_hex(32), self.settings.image_model, now(),
                      size, json.dumps(profile), json.dumps(fit), json.dumps(photo_check),
-                     json.dumps({a: {"status": "pending"} for a in self.settings.tryon_angles}), request_key, fingerprint, now()))
+                     json.dumps({a: {"status": "pending"} for a in self.settings.tryon_angles}), quota_source, request_key, fingerprint, now()))
         except Exception:
             path.unlink(missing_ok=True)
             raise
+        self.wakeup.set()
         self._dispatch()
         return job_id
 
@@ -287,6 +317,7 @@ class TryOnService:
             conn.execute("UPDATE tryons SET status='queued',error=NULL,retry_count=retry_count+1 WHERE id=?", (job_id,))
             if request_key:
                 conn.execute("INSERT INTO retry_requests VALUES (?,?,?)", (user_id, request_key, job_id))
+        self.wakeup.set()
         self._dispatch()
 
     def _garment(self, product: dict) -> bytes:
@@ -365,7 +396,10 @@ class TryOnService:
                     return
             views.update(json.loads(row["views"]))
             fit, profile = json.loads(row["fit_snapshot"]), json.loads(row["body_snapshot"])
-            product, photo, color = fit["product"], Path(row["photo_path"]).read_bytes(), row["color"]
+            photo_file = Path(row["photo_path"])
+            if not photo_file.is_file():
+                self.storage.get_private(photo_file.name)
+            product, photo, color = fit["product"], photo_file.read_bytes(), row["color"]
             context = {"body": profile, "selected_size": row["size"], "garment": fit["garment"],
                        "chart_verified": fit["chart_verified"], "material": product["material"]}
             garment = self._garment(product)
@@ -406,6 +440,9 @@ class TryOnService:
                              (final_status,
                               None if count == target_count else "Một số góc chưa tạo được. Ảnh đã có vẫn được giữ lại.",
                               int((time.perf_counter() - started) * 1000), job_id))
+                if final_status == "failed" and dict(row).get("quota_source") == "starter" and row["retry_count"] == 0:
+                    conn.execute("UPDATE users SET starter_tryons_left = COALESCE(starter_tryons_left, 0) + 1 WHERE id=?", (row["user_id"],))
+                    conn.execute("UPDATE tryons SET quota_source='refunded' WHERE id=?", (job_id,))
 
             if final_status in ("completed", "partial"):
                 try:
@@ -428,7 +465,11 @@ class TryOnService:
             message = "Chưa thể tạo ảnh thử đồ. Vui lòng thử ảnh rõ phần thân, đứng thẳng và thử lại."
             with self.db.connect() as conn:
                 completed = any(v.get("status") == "completed" for v in views.values())
-                conn.execute("UPDATE tryons SET status=?,error=?,duration_ms=? WHERE id=?", ("partial" if completed else "failed", message, int((time.perf_counter() - started) * 1000), job_id))
+                final_st = "partial" if completed else "failed"
+                conn.execute("UPDATE tryons SET status=?,error=?,duration_ms=? WHERE id=?", (final_st, message, int((time.perf_counter() - started) * 1000), job_id))
+                if final_st == "failed" and row and dict(row).get("quota_source") == "starter" and row["retry_count"] == 0:
+                    conn.execute("UPDATE users SET starter_tryons_left = COALESCE(starter_tryons_left, 0) + 1 WHERE id=?", (row["user_id"],))
+                    conn.execute("UPDATE tryons SET quota_source='refunded' WHERE id=?", (job_id,))
         finally:
             with self.lock:
                 self.inflight.discard(job_id)

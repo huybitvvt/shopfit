@@ -73,7 +73,9 @@ function AndroidBanner() {
 }
 
 export default function AdBanner() {
-  return isRunningInExpoGo() ? null : <AndroidBanner />;
+  const enableTestAds = process.env.EXPO_PUBLIC_ENABLE_TEST_ADS === '1';
+  if (!enableTestAds || isRunningInExpoGo()) return null;
+  return <AndroidBanner />;
 }
 
 const styles = StyleSheet.create({

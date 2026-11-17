@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: shopfit-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements-lock.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
+      - key: SEED_DEMO
+        value: "false"
+      - key: TRYON_ANGLES
+        value: "front,left,back,right"
+      - key: TRYON_DAILY_LIMIT
+        value: "100"
+      - key: GEMINI_IMAGE_MODEL
+        value: "gemini-3.1-flash-lite-image"
+      - key: GEMINI_VISION_MODEL
+        value: "gemini-2.5-flash"
+      - key: CORS_ORIGINS
+        value: "https://mobile-rose-psi.vercel.app,http://localhost:8081"

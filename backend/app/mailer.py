@@ -107,7 +107,7 @@ def send_otp_email(to_email: str, otp: str, settings: Settings) -> bool:
 
     # Priority 3: Standard SMTP (for environments where outbound ports 587/465 are unblocked)
     if not settings.smtp_host or not settings.smtp_user or not settings.smtp_password:
-        logger.warning("No email provider configured (SMTP/Resend/Brevo). OTP for %s is %s", to_email, otp)
+        logger.warning("No email provider configured (SMTP/Resend/Brevo) for recipient %s", to_email)
         return False
 
     msg = MIMEMultipart("alternative")

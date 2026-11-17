@@ -50,7 +50,7 @@ export default function AdminSizing() {
     if (parsedRows.some(row => Object.entries(row).some(([k, v]) => k !== 'size' && v != null && (!Number.isFinite(v) || Number(v) <= 0))) || Object.values(parsedEase).some(v => !Number.isFinite(v) || v < 0 || v > 40)) { setError('Số đo cần là số dương; độ dư vải từ 0 đến 40 cm.'); return; }
     setBusy(true);
     try {
-      await request(`/api/admin/products/${id}/size-chart`, { method: 'PATCH', body: JSON.stringify({ rows: parsedRows, ease: parsedEase, verified, back_image_url: backImage } satisfies Partial<SizeChart>) });
+      await request(`/api/admin/products/${id}/size-chart`, { method: 'PATCH', body: JSON.stringify({ rows: parsedRows, ease: parsedEase, verified, back_image_url: backImage, detail_image_url: product?.detail_image_url ?? product?.size_chart.detail_image_url ?? null } satisfies Partial<SizeChart>) });
       await refresh(); notify('Đã lưu bảng số đo sản phẩm.'); router.back();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }

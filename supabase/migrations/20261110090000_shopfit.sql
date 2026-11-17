@@ -21,8 +21,9 @@ CREATE TABLE IF NOT EXISTS variants (
     stock INTEGER NOT NULL CHECK(stock >= 0), PRIMARY KEY (product_id, size, color)
 );
 CREATE TABLE IF NOT EXISTS orders (
-    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), customer_name TEXT NOT NULL,
+    id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, customer_name TEXT NOT NULL,
     phone TEXT NOT NULL, address TEXT NOT NULL, note TEXT NOT NULL, total INTEGER NOT NULL,
+    subtotal INTEGER, discount_amount INTEGER NOT NULL DEFAULT 0, voucher_code TEXT,
     status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
     request_key TEXT, request_fingerprint TEXT
 );
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS tryons (
     usage TEXT, created_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
     size TEXT, body_snapshot TEXT, fit_snapshot TEXT, photo_check TEXT,
     views TEXT NOT NULL DEFAULT '{}', retry_count INTEGER NOT NULL DEFAULT 0,
+    quota_source TEXT NOT NULL DEFAULT 'daily',
     request_key TEXT, request_fingerprint TEXT, updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tryons_user ON tryons(user_id, created_at);
@@ -89,7 +91,7 @@ CREATE TABLE IF NOT EXISTS token_packages (
     active INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS payment_transactions (
-    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
+    id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     package_id TEXT NOT NULL REFERENCES token_packages(id), amount INTEGER NOT NULL,
     tryons INTEGER NOT NULL, payment_code TEXT UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
     qr_url TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, completed_at TEXT
@@ -97,10 +99,20 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
 CREATE INDEX IF NOT EXISTS idx_trans_user ON payment_transactions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_trans_code ON payment_transactions(payment_code);
 CREATE TABLE IF NOT EXISTS user_vouchers (
-    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), code TEXT NOT NULL,
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, code TEXT NOT NULL,
     discount_amount INTEGER NOT NULL, min_order INTEGER NOT NULL DEFAULT 0,
     used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
 );
+
+-- Additive upgrades for existing live PostgreSQL schemas
+ALTER TABLE orders ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS subtotal INTEGER;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_amount INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS voucher_code TEXT;
+ALTER TABLE payment_transactions ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE tryons ADD COLUMN IF NOT EXISTS quota_source TEXT NOT NULL DEFAULT 'daily';
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_tryons_product ON tryons(product_id, status);
 
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
@@ -113,6 +125,7 @@ ALTER TABLE body_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE photo_checks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tryon_evaluations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wardrobe ENABLE ROW LEVEL SECURITY;
+ALTER TABLE password_resets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fit_reviews ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_calls ENABLE ROW LEVEL SECURITY;
 ALTER TABLE retry_requests ENABLE ROW LEVEL SECURITY;
@@ -121,7 +134,7 @@ ALTER TABLE token_packages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_vouchers ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON users, sessions, products, variants, orders, order_items, tryons,
-    body_profiles, photo_checks, tryon_evaluations, wardrobe, fit_reviews, ai_calls, retry_requests, reports,
+    body_profiles, photo_checks, tryon_evaluations, wardrobe, password_resets, fit_reviews, ai_calls, retry_requests, reports,
     token_packages, payment_transactions, user_vouchers
     FROM anon, authenticated;
 REVOKE ALL ON SEQUENCE order_items_id_seq FROM anon, authenticated;

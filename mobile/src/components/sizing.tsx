@@ -25,31 +25,31 @@ const QUICK_PRESETS = [
     id: 'nu_s',
     label: '👩 Nữ Chuẩn S',
     desc: '1m55 · 45kg',
-    data: { height_cm: 155, weight_kg: 45, chest_cm: 80, waist_cm: 62, hip_cm: 86, fit_preference: 'regular' as const },
+    data: { height_cm: 155, weight_kg: 45, chest_cm: 80, waist_cm: 62, hip_cm: 86, shoulder_cm: 36, inseam_cm: 68, fit_preference: 'regular' as const },
   },
   {
     id: 'nu_m',
     label: '👩 Nữ Chuẩn M',
     desc: '1m60 · 50kg',
-    data: { height_cm: 160, weight_kg: 50, chest_cm: 84, waist_cm: 66, hip_cm: 90, fit_preference: 'regular' as const },
+    data: { height_cm: 160, weight_kg: 50, chest_cm: 84, waist_cm: 66, hip_cm: 90, shoulder_cm: 38, inseam_cm: 70, fit_preference: 'regular' as const },
   },
   {
     id: 'nu_l',
     label: '👩 Nữ Chuẩn L',
     desc: '1m65 · 56kg',
-    data: { height_cm: 165, weight_kg: 56, chest_cm: 88, waist_cm: 70, hip_cm: 94, fit_preference: 'regular' as const },
+    data: { height_cm: 165, weight_kg: 56, chest_cm: 88, waist_cm: 70, hip_cm: 94, shoulder_cm: 40, inseam_cm: 72, fit_preference: 'regular' as const },
   },
   {
     id: 'nam_m',
     label: '👨 Nam Chuẩn M',
     desc: '1m70 · 62kg',
-    data: { height_cm: 170, weight_kg: 62, chest_cm: 94, waist_cm: 78, hip_cm: 94, fit_preference: 'regular' as const },
+    data: { height_cm: 170, weight_kg: 62, chest_cm: 94, waist_cm: 78, hip_cm: 94, shoulder_cm: 44, inseam_cm: 76, fit_preference: 'regular' as const },
   },
   {
     id: 'nam_l',
     label: '👨 Nam Chuẩn L',
     desc: '1m75 · 70kg',
-    data: { height_cm: 175, weight_kg: 70, chest_cm: 100, waist_cm: 84, hip_cm: 100, fit_preference: 'regular' as const },
+    data: { height_cm: 175, weight_kg: 70, chest_cm: 100, waist_cm: 84, hip_cm: 100, shoulder_cm: 46, inseam_cm: 78, fit_preference: 'regular' as const },
   },
 ];
 

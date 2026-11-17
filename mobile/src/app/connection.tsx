@@ -1,6 +1,7 @@
+import { Redirect } from 'expo-router';
 import { useState } from 'react';
 import { Text, View } from 'react-native';
-import { API_URL, DEFAULT_API_URL } from '../api';
+import { API_URL, DEFAULT_API_URL, IS_REMOTE_WEB } from '../api';
 import { Button, ErrorMessage, Field, Header, Screen, s } from '../components/ui';
 import { useStore } from '../store';
 
@@ -9,6 +10,7 @@ export default function ConnectionScreen() {
   const [url, setUrl] = useState(API_URL);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  if (!__DEV__ && IS_REMOTE_WEB) return <Redirect href="/" />;
   async function save() {
     let normalized: string;
     try {

@@ -21,3 +21,8 @@ def verify_password(password: str, encoded: str) -> bool:
 
 def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def otp_digest(email: str, otp: str, secret: str) -> str:
+    msg = f"{email.strip().lower()}:{otp.strip()}".encode()
+    return hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()

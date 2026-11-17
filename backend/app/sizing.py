@@ -113,7 +113,7 @@ def advise(product, profile, color, reference=None):
         checks = [c for c in region_checks if c["key"] in required]
         if not checks:
             checks = region_checks
-        eligible = all(c["ease_cm"] >= c["target_cm"] for c in checks)
+        eligible = all(c["target_cm"] <= c["ease_cm"] <= c["target_cm"] + 14 for c in checks)
         score = sum(abs(c["ease_cm"] - c["target_cm"]) for c in checks)
         result["candidates"].append({"size": row["size"], "eligible": eligible, "score": round(score, 2), "checks": region_checks})
     eligible = [c for c in result["candidates"] if c["eligible"]]
@@ -127,11 +127,18 @@ def advise(product, profile, color, reference=None):
 def demo_chart(product):
     """Explicitly unverified seed data, never passed off as measurements of stock photos."""
     rows = []
+    is_dress = product.get("tryon_category") == "one-pieces" or any(
+        w in product.get("category", "").lower() for w in ("váy", "đầm")
+    )
     for i, size in enumerate(product["sizes"]):
-        row = {"size": size, "chest_cm": 96 + i * 4, "waist_cm": 76 + i * 4,
-               "hip_cm": 96 + i * 4, "length_cm": 66 + i * 2}
-        if product["tryon_category"] == "bottoms":
-            row["length_cm"] = 98 + i * 2
-            row["inseam_cm"] = 72 + i * 2
+        if is_dress:
+            row = {"size": size, "chest_cm": 86 + i * 4, "waist_cm": 68 + i * 4,
+                   "hip_cm": 92 + i * 4, "length_cm": 108 + i * 2}
+        else:
+            row = {"size": size, "chest_cm": 96 + i * 4, "waist_cm": 76 + i * 4,
+                   "hip_cm": 96 + i * 4, "length_cm": 66 + i * 2}
+            if product["tryon_category"] == "bottoms":
+                row["length_cm"] = 98 + i * 2
+                row["inseam_cm"] = 72 + i * 2
         rows.append(row)
     return SizeChart(rows=rows).model_dump()

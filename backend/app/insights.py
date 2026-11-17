@@ -117,8 +117,12 @@ def insight_routes(db, settings, current_user, admin):
     def insights(user=Depends(admin)):
         with db.connect() as conn:
             rows = product_feedback(conn)
-            for row in rows:
-                row["name"] = conn.execute("SELECT name FROM products WHERE id=?", (row["product_id"],)).fetchone()[0]
+            if rows:
+                pids = list({r["product_id"] for r in rows})
+                ph = ",".join("?" for _ in pids)
+                name_map = {r["id"]: r["name"] for r in conn.execute(f"SELECT id,name FROM products WHERE id IN ({ph})", tuple(pids))}
+                for row in rows:
+                    row["name"] = name_map.get(row["product_id"], row["product_id"])
             counts = conn.execute("""SELECT count(*) AS total, sum(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed,
                 sum(CASE WHEN status='partial' THEN 1 ELSE 0 END) AS partial,
                 sum(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,avg(duration_ms) AS average_ms FROM tryons WHERE deleted=0""").fetchone()

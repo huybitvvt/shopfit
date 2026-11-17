@@ -22,7 +22,11 @@
     "web": {
       "favicon": "./assets/shopfit-icon.png",
       "bundler": "metro",
-      "name": "ShopFit Studio"
+      "name": "ShopFit Studio — Phòng Thử Đồ AI & Tư Vấn Size",
+      "shortName": "ShopFit",
+      "lang": "vi",
+      "themeColor": "#344E40",
+      "description": "Thời trang thiết kế tích hợp Phòng thử đồ ảo AI 4 góc & Tư vấn chọn size thông minh theo số đo cơ thể."
     },
     "plugins": [
       "expo-router",

@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Linking, Platform, Pressable, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, BackHandler, Linking, Pressable, Text, View } from 'react-native';
 import { API_URL } from '../api';
 import { Button, ErrorMessage, Field, Header, Screen, s } from '../components/ui';
 import { useStore } from '../store';
@@ -20,9 +20,40 @@ export default function Auth() {
   const [otp, setOtp] = useState('');
   const [visible, setVisible] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [verifyingOtp, setVerifyingOtp] = useState(false);
+
+  // Resend OTP 60s countdown
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setInterval(() => setCooldown(c => Math.max(0, c - 1)), 1000);
+    return () => clearInterval(timer);
+  }, [cooldown]);
+
+  // Android hardware Back steps back cleanly inside multi-step recovery flow
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (mode === 'reset') {
+        setMode('otp');
+        setError(null);
+        return true;
+      }
+      if (mode === 'otp') {
+        setMode('forgot');
+        setError(null);
+        return true;
+      }
+      if (mode === 'forgot' || mode === 'signup') {
+        setMode('login');
+        setError(null);
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [mode]);
 
   async function handleVerifyOtpCode(codeToVerify?: string) {
     const code = (codeToVerify ?? otp).trim();
@@ -44,13 +75,14 @@ export default function Auth() {
   }
 
   async function handleResendOtp() {
-    if (!email.trim()) return;
+    if (!email.trim() || cooldown > 0) return;
     setError(null);
     setBusy(true);
     try {
       const res = await forgotPassword(email.trim());
       notify(res.message || 'Mã OTP mới đã được gửi đến email của bạn.');
       setOtp('');
+      setCooldown(60);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -61,8 +93,8 @@ export default function Auth() {
   async function submit() {
     setError(null);
 
-    if ((mode === 'login' || mode === 'signup') && !acceptedTerms) {
-      setError('Vui lòng tích chọn đồng ý với Điều khoản dịch vụ và Chính sách quyền riêng tư để tiếp tục.');
+    if (mode === 'signup' && !acceptedTerms) {
+      setError('Vui lòng tích chọn đồng ý với Điều khoản dịch vụ và Chính sách quyền riêng tư để tạo tài khoản.');
       return;
     }
 
@@ -75,7 +107,8 @@ export default function Auth() {
       try {
         await login(email.trim(), password);
         notify('Đã đăng nhập. Chào mừng bạn trở lại.');
-        if (router.canGoBack()) router.back(); else router.replace('/profile');
+        if (router.canGoBack()) router.back();
+        else router.replace('/profile');
       } catch (e) {
         setError((e as Error).message);
       } finally {
@@ -90,7 +123,8 @@ export default function Auth() {
       try {
         await register(name.trim(), email.trim(), password);
         notify('Chào mừng bạn đến với ShopFit.');
-        if (router.canGoBack()) router.back(); else router.replace('/profile');
+        if (router.canGoBack()) router.back();
+        else router.replace('/profile');
       } catch (e) {
         setError((e as Error).message);
       } finally {
@@ -106,6 +140,7 @@ export default function Auth() {
         const res = await forgotPassword(email.trim());
         notify(res.message || 'Mã xác thực OTP đã được gửi đến email của bạn.');
         setOtp('');
+        setCooldown(60);
         setMode('otp');
       } catch (e) {
         setError((e as Error).message);
@@ -173,7 +208,7 @@ export default function Auth() {
   return (
     <Screen>
       <Header title="ShopFit Studio" back />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ width: '100%', maxWidth: 440, alignSelf: 'center', paddingTop: 20 }}>
+      <View style={{ width: '100%', maxWidth: 440, alignSelf: 'center', paddingTop: 20 }}>
         <Text style={s.kicker}>{current.kicker}</Text>
         <Text style={[s.title, { fontSize: 44, lineHeight: 48, marginTop: 10 }]}>{current.title}</Text>
         <Text style={[s.muted, { marginTop: 14, marginBottom: 26 }]}>{current.subtitle}</Text>
@@ -229,31 +264,37 @@ export default function Auth() {
         {mode === 'login' && (
           <Pressable
             accessibilityRole="button"
-            onPress={() => { setMode('forgot'); setError(null); }}
-            style={{ alignSelf: 'flex-end', marginBottom: 10, marginTop: -6 }}
+            onPress={() => {
+              setMode('forgot');
+              setError(null);
+            }}
+            style={{ alignSelf: 'flex-end', marginBottom: 14, marginTop: -4 }}
           >
             <Text style={{ fontFamily: t.fonts.medium, color: t.colors.green, fontSize: 13 }}>Quên mật khẩu?</Text>
           </Pressable>
         )}
 
-        {/* Checkbox for Terms & Privacy Policy (Login & Signup) */}
-        {(mode === 'login' || mode === 'signup') && (
+        {/* Mandatory Checkbox for Signup; clean passive links on Login */}
+        {mode === 'signup' && (
           <Pressable
             accessibilityRole="checkbox"
+            accessibilityLabel="Đồng ý điều khoản dịch vụ và chính sách quyền riêng tư"
             accessibilityState={{ checked: acceptedTerms }}
             onPress={() => setAcceptedTerms(v => !v)}
             style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 14 }}
           >
-            <View style={{
-              width: 22,
-              height: 22,
-              borderRadius: 6,
-              borderWidth: 1.5,
-              borderColor: acceptedTerms ? t.colors.green : t.colors.muted,
-              backgroundColor: acceptedTerms ? t.colors.green : 'transparent',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}>
+            <View
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 6,
+                borderWidth: 1.5,
+                borderColor: acceptedTerms ? t.colors.green : t.colors.muted,
+                backgroundColor: acceptedTerms ? t.colors.green : 'transparent',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
               {acceptedTerms && <Ionicons name="checkmark" size={16} color="#FFFFFF" />}
             </View>
             <Text style={[s.muted, { flex: 1, fontSize: 13, lineHeight: 19 }]}>
@@ -276,13 +317,27 @@ export default function Auth() {
           </Pressable>
         )}
 
+        {mode === 'login' && (
+          <Text style={[s.muted, { fontSize: 12, lineHeight: 18, marginBottom: 14 }]}>
+            Khi đăng nhập, bạn đồng ý với{' '}
+            <Text onPress={() => void Linking.openURL(`${API_URL}/terms`)} style={{ color: t.colors.green, textDecorationLine: 'underline' }}>
+              Điều khoản dịch vụ
+            </Text>{' '}
+            &{' '}
+            <Text onPress={() => void Linking.openURL(`${API_URL}/privacy`)} style={{ color: t.colors.green, textDecorationLine: 'underline' }}>
+              Chính sách quyền riêng tư
+            </Text>
+            .
+          </Text>
+        )}
+
         {/* STEP 2: ENTER OTP & AUTO-VERIFY */}
         {mode === 'otp' && (
           <View style={{ gap: 10 }}>
             <Field
               label="Mã xác thực OTP (6 chữ số)"
               value={otp}
-              onChangeText={(text) => {
+              onChangeText={text => {
                 const clean = text.replace(/[^0-9]/g, '');
                 setOtp(clean);
                 if (clean.length === 6) {
@@ -296,19 +351,17 @@ export default function Auth() {
             {verifyingOtp && (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                 <ActivityIndicator size="small" color={t.colors.green} />
-                <Text style={{ fontSize: 12, color: t.colors.green, fontFamily: t.fonts.medium }}>
-                  Đang kiểm tra mã OTP...
-                </Text>
+                <Text style={{ fontSize: 12, color: t.colors.green, fontFamily: t.fonts.medium }}>Đang kiểm tra mã OTP...</Text>
               </View>
             )}
             <Pressable
               accessibilityRole="button"
-              disabled={busy}
+              disabled={busy || cooldown > 0}
               onPress={() => void handleResendOtp()}
-              style={{ alignSelf: 'flex-start', marginBottom: 12 }}
+              style={{ alignSelf: 'flex-start', marginBottom: 12, opacity: cooldown > 0 ? 0.55 : 1 }}
             >
               <Text style={{ fontSize: 13, color: t.colors.green, fontFamily: t.fonts.medium }}>
-                Chưa nhận được mã? Gửi lại OTP
+                {cooldown > 0 ? `Gửi lại mã OTP sau ${cooldown}s` : 'Chưa nhận được mã? Gửi lại OTP'}
               </Text>
             </Pressable>
           </View>
@@ -364,12 +417,14 @@ export default function Auth() {
           <Pressable
             accessibilityRole="button"
             disabled={busy}
-            onPress={() => { setMode('signup'); setError(null); }}
+            onPress={() => {
+              setMode('signup');
+              setError(null);
+            }}
             style={{ minHeight: 50, justifyContent: 'center', alignItems: 'center', marginTop: 10 }}
           >
             <Text style={s.muted}>
-              Lần đầu đến ShopFit?{' '}
-              <Text style={{ fontFamily: t.fonts.bold, color: t.colors.green }}>Đăng ký</Text>
+              Lần đầu đến ShopFit? <Text style={{ fontFamily: t.fonts.bold, color: t.colors.green }}>Đăng ký</Text>
             </Text>
           </Pressable>
         )}
@@ -378,12 +433,14 @@ export default function Auth() {
           <Pressable
             accessibilityRole="button"
             disabled={busy}
-            onPress={() => { setMode('login'); setError(null); }}
+            onPress={() => {
+              setMode('login');
+              setError(null);
+            }}
             style={{ minHeight: 50, justifyContent: 'center', alignItems: 'center', marginTop: 10 }}
           >
             <Text style={s.muted}>
-              Đã có tài khoản?{' '}
-              <Text style={{ fontFamily: t.fonts.bold, color: t.colors.green }}>Đăng nhập</Text>
+              Đã có tài khoản? <Text style={{ fontFamily: t.fonts.bold, color: t.colors.green }}>Đăng nhập</Text>
             </Text>
           </Pressable>
         )}
@@ -392,13 +449,16 @@ export default function Auth() {
           <Pressable
             accessibilityRole="button"
             disabled={busy}
-            onPress={() => { setMode('login'); setError(null); }}
+            onPress={() => {
+              setMode('login');
+              setError(null);
+            }}
             style={{ minHeight: 50, justifyContent: 'center', alignItems: 'center', marginTop: 10 }}
           >
             <Text style={{ fontFamily: t.fonts.medium, color: t.colors.green }}>Quay lại đăng nhập</Text>
           </Pressable>
         )}
-      </KeyboardAvoidingView>
+      </View>
     </Screen>
   );
 }

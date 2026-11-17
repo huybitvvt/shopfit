@@ -1,50 +1,133 @@
+import * as ImageManipulator from 'expo-image-manipulator';
 import { Platform } from 'react-native';
 import type { PickedPhoto } from './types';
 
-const isBrowserRemote = Platform.OS === 'web' && typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+export const IS_REMOTE_WEB =
+  Platform.OS === 'web' &&
+  typeof window !== 'undefined' &&
+  window.location.hostname !== 'localhost' &&
+  window.location.hostname !== '127.0.0.1';
+
+export const PRODUCTION_API_URL = 'https://shopfit-api.onrender.com';
 
 export const DEFAULT_API_URL = (
   process.env.EXPO_PUBLIC_API_URL ||
-  (isBrowserRemote
-    ? 'https://shopfit-api.onrender.com'
+  (IS_REMOTE_WEB
+    ? PRODUCTION_API_URL
     : Platform.OS === 'android'
     ? 'http://10.0.2.2:8000'
     : 'http://localhost:8000')
 ).replace(/\/$/, '');
+
 export let API_URL = DEFAULT_API_URL;
-export function setApiUrl(value: string) { API_URL = value.replace(/\/$/, ''); }
+export function setApiUrl(value: string) {
+  API_URL = value.replace(/\/$/, '');
+}
+
 let token: string | null = null;
-export function setToken(value: string | null) { token = value; }
-export function mediaUrl(path: string | null | undefined) { return path?.startsWith('/') ? `${API_URL}${path}` : path || ''; }
-export class ApiError extends Error { constructor(message: string, public status: number) { super(message); } }
+export function setToken(value: string | null) {
+  token = value;
+}
+
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler;
+}
+
+export function mediaUrl(path: string | null | undefined) {
+  return path?.startsWith('/') ? `${API_URL}${path}` : path || '';
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
 
 export async function request<T>(path: string, options: RequestInit = {}, timeoutMs = 30000): Promise<T> {
   const headers = new Headers(options.headers);
-  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const sentToken = token;
+  if (sentToken) headers.set('Authorization', `Bearer ${sentToken}`);
   if (options.body && !(options.body instanceof FormData)) headers.set('Content-Type', 'application/json');
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${API_URL}${path}`, { ...options, headers, signal: controller.signal });
     if (!response.ok) {
+      if (
+        response.status === 401 &&
+        sentToken &&
+        sentToken === token &&
+        !path.startsWith('/api/auth/login') &&
+        !path.startsWith('/api/auth/me')
+      ) {
+        onUnauthorized?.();
+      }
       const data = await response.json().catch(() => ({}));
-      throw new ApiError(typeof data.detail === 'string' ? data.detail : 'Thông tin chưa hợp lệ. Vui lòng kiểm tra các trường đã nhập.', response.status);
+      throw new ApiError(
+        typeof data.detail === 'string' ? data.detail : 'Thông tin chưa hợp lệ. Vui lòng kiểm tra các trường đã nhập.',
+        response.status
+      );
     }
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError('Chưa kết nối được với shop. Vui lòng kiểm tra kết nối và thử lại.', 0);
-  } finally { clearTimeout(timeout); }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function compressPhoto(photo: PickedPhoto): Promise<PickedPhoto> {
+  if (photo.compressed) return photo;
+  // On Web, skip manipulation if file is already small (< 1.2MB) to keep instant response & preserve E2E file mocks
+  if (Platform.OS === 'web' && photo.file && photo.file.size > 0 && photo.file.size <= 1_200_000) {
+    return { ...photo, compressed: true };
+  }
+  try {
+    const actions: ImageManipulator.Action[] = [];
+    if (photo.width && photo.height) {
+      if (photo.width >= photo.height && photo.width > 1600) {
+        actions.push({ resize: { width: 1600 } });
+      } else if (photo.height > photo.width && photo.height > 1600) {
+        actions.push({ resize: { height: 1600 } });
+      }
+    } else if (Platform.OS !== 'web') {
+      actions.push({ resize: { width: 1440 } });
+    }
+    const manipulated = await ImageManipulator.manipulateAsync(photo.uri, actions, {
+      compress: 0.85,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+    return {
+      uri: manipulated.uri,
+      width: manipulated.width,
+      height: manipulated.height,
+      mimeType: 'image/jpeg',
+      fileName: (photo.fileName || 'photo').replace(/\.[^.]+$/, '') + '.jpg',
+      compressed: true,
+    };
+  } catch {
+    return { ...photo, compressed: true };
+  }
 }
 
 export async function photoForm(photo: PickedPhoto, field: string) {
+  const prepared = await compressPhoto(photo);
   const form = new FormData();
   if (Platform.OS === 'web') {
-    const blob = photo.file || await (await fetch(photo.uri)).blob();
-    form.append(field, blob, photo.fileName || 'photo.jpg');
+    const blob = prepared.file || (await (await fetch(prepared.uri)).blob());
+    form.append(field, blob, prepared.fileName || 'photo.jpg');
   } else {
-    form.append(field, { uri: photo.uri, type: photo.mimeType || 'image/jpeg', name: photo.fileName || 'photo.jpg' } as unknown as Blob);
+    form.append(
+      field,
+      {
+        uri: prepared.uri,
+        type: prepared.mimeType || 'image/jpeg',
+        name: prepared.fileName || 'photo.jpg',
+      } as unknown as Blob
+    );
   }
   return form;
 }

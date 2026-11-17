@@ -52,7 +52,21 @@ export type TryonAnalytics = {
 export type CartLine = { key: string; product: Product; size: string; color: string; quantity: number };
 export type FitReview = { actual_fit: 'tight' | 'fits' | 'loose'; notes: string; updated_at: string };
 export type OrderItem = { id: number; product_id: string; name: string; image_url: string; size: string; color: string; quantity: number; price: number; fit_review: FitReview | null };
-export type Order = { id: string; customer_name: string; phone: string; address: string; note: string; total: number; status: string; created_at: string; items: OrderItem[] };
+export type Order = {
+  id: string;
+  user_id?: string | null;
+  customer_name: string;
+  phone: string;
+  address: string;
+  note: string;
+  total: number;
+  subtotal?: number | null;
+  discount_amount?: number;
+  voucher_code?: string | null;
+  status: string;
+  created_at: string;
+  items: OrderItem[];
+};
 export type Measurements = { chest_cm?: number | null; waist_cm?: number | null; hip_cm?: number | null; shoulder_cm?: number | null; inseam_cm?: number | null };
 export type BodyProfile = Measurements & { height_cm: number; weight_kg: number; fit_preference: 'slim' | 'regular' | 'relaxed' };
 export type GarmentSize = Measurements & { size: string; length_cm?: number | null };
@@ -72,7 +86,7 @@ export type PhotoCheck = { accepted: boolean; messages: string[]; warnings?: str
 export type TryOn = { id: string; product_id: string; product_name?: string; color: string; size: string | null; status: 'queued' | 'processing' | 'completed' | 'partial' | 'failed'; photo_url: string; result_url: string | null; error: string | null; duration_ms: number | null; model: string; created_at: string; views: TryOnView[]; retry_count: number; body_snapshot: BodyProfile | null; fit_snapshot: { selected_size: string; garment: GarmentSize | null; chart_verified: boolean; advice: SizeAdvice } | null };
 export type Evaluation = { identity_score: number; garment_score: number; fit_score: number; actual_fit: 'tight' | 'fits' | 'loose'; notes: string; actual_url: string; updated_at: string };
 export type Health = { status: string; ai_ready: boolean; engine: string; model: string; demo_accounts: boolean };
-export type PickedPhoto = { uri: string; mimeType?: string | null; fileName?: string | null; file?: File };
+export type PickedPhoto = { uri: string; mimeType?: string | null; fileName?: string | null; file?: File; width?: number; height?: number; compressed?: boolean };
 export type TokenPackage = {
   id: string;
   name: string;
@@ -97,9 +111,23 @@ export type PaymentOrder = {
 };
 export type PaymentStatus = {
   transaction_id: string;
-  status: 'pending' | 'completed' | 'failed';
+  status: 'pending' | 'verifying' | 'completed' | 'rejected' | 'failed';
   tryons: number;
   amount: number;
+  completed_at: string | null;
+};
+export type AdminPayment = {
+  id: string;
+  user_id: string | null;
+  user_name?: string | null;
+  user_email?: string | null;
+  package_id: string;
+  package_name?: string | null;
+  amount: number;
+  tryons: number;
+  payment_code: string;
+  status: string;
+  created_at: string;
   completed_at: string | null;
 };
 export type UserVoucher = {

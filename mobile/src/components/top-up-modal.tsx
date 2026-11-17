@@ -1,12 +1,13 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import * as Clipboard from 'expo-clipboard';
 import { Image } from 'expo-image';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { request } from '../api';
-import { Button, s } from './ui';
 import { useStore } from '../store';
 import { money, theme as t } from '../theme';
 import type { PaymentOrder, PaymentStatus, TokenPackage } from '../types';
+import { Button, ToastOverlay, s } from './ui';
 
 const DEFAULT_PACKAGES: TokenPackage[] = [
   { id: 'pack_10', name: 'Gói Thử Nhanh', price: 19000, tryons: 10, tag: 'Tiết kiệm', voucher_value: 0 },
@@ -20,6 +21,7 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
   const [selectedId, setSelectedId] = useState<string>('pack_30');
   const [step, setStep] = useState<'select' | 'qr' | 'success'>('select');
   const [order, setOrder] = useState<PaymentOrder | null>(null);
+  const [reportedPaid, setReportedPaid] = useState(false);
   const [loading, setLoading] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [completedTryons, setCompletedTryons] = useState(0);
@@ -29,20 +31,19 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     setStep('select');
     setOrder(null);
+    setReportedPaid(false);
     onClose();
   };
 
-  // Load packages on open
   useEffect(() => {
     if (!visible) return;
     void request<TokenPackage[]>('/api/payment/packages')
-      .then((data) => {
+      .then(data => {
         if (data && data.length > 0) setPackages(data);
       })
       .catch(() => {});
   }, [visible]);
 
-  // Polling for QR status
   useEffect(() => {
     if (step !== 'qr' || !order) return;
 
@@ -54,6 +55,10 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
           setCompletedTryons(res.tryons);
           setStep('success');
           void refreshQuota();
+        } else if (res.status === 'rejected') {
+          if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+          notify('Giao dịch chưa đối soát được. Vui lòng kiểm tra lại biên lai hoặc tạo mã mới.');
+          setReportedPaid(false);
         }
       } catch {
         // network retry
@@ -63,13 +68,15 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
     return () => {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
     };
-  }, [step, order, refreshQuota]);
+  }, [step, order, refreshQuota, notify]);
 
-  const copyToClipboard = (text: string, label: string) => {
-    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
-      void navigator.clipboard.writeText(text);
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await Clipboard.setStringAsync(text);
+      notify(`Đã sao chép ${label}`);
+    } catch {
+      notify(`Không thể sao chép ${label}`);
     }
-    notify(`Đã sao chép ${label}`);
   };
 
   const handleCreateOrder = async () => {
@@ -80,6 +87,7 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
         body: JSON.stringify({ package_id: selectedId }),
       });
       setOrder(data);
+      setReportedPaid(false);
       setStep('qr');
     } catch (e) {
       notify((e as Error).message);
@@ -88,11 +96,11 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
     }
   };
 
-  const handleManualConfirm = async () => {
+  const handleReportPaid = async () => {
     if (!order) return;
     setConfirming(true);
     try {
-      const res = await request<{ status: string; tryons: number }>(`/api/payment/confirm/${order.transaction_id}`, {
+      const res = await request<{ status: string; tryons: number; message?: string }>(`/api/payment/confirm/${order.transaction_id}`, {
         method: 'POST',
       });
       if (res.status === 'completed') {
@@ -100,6 +108,9 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
         setCompletedTryons(res.tryons);
         setStep('success');
         void refreshQuota();
+      } else {
+        setReportedPaid(true);
+        notify(res.message || 'Đã gửi báo chuyển khoản cho chủ shop đối soát.');
       }
     } catch (e) {
       notify((e as Error).message);
@@ -122,7 +133,7 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
                 {step === 'select' ? 'Nạp Lượt Thử Đồ AI' : step === 'qr' ? 'Quét Mã VietQR' : 'Thành Công'}
               </Text>
             </View>
-            <Pressable onPress={handleClose} hitSlop={10}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Đóng cửa sổ nạp lượt" onPress={handleClose} hitSlop={10}>
               <Ionicons name="close" size={24} color={t.colors.muted} />
             </Pressable>
           </View>
@@ -130,28 +141,28 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
           {/* STEP 1: SELECT PACKAGE */}
           {step === 'select' && (
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 460 }}>
-              {/* Quota overview */}
               <View style={modalStyles.quotaCard}>
                 <Text style={{ fontSize: 13, color: t.colors.muted }}>Số dư lượt thử hiện tại:</Text>
                 <Text style={{ fontSize: 18, fontFamily: t.fonts.bold, color: t.colors.ink, marginTop: 2 }}>
                   {quota?.total_available ?? 0} lượt{' '}
                   <Text style={{ fontSize: 12, fontFamily: t.fonts.regular, color: t.colors.muted }}>
-                    ({quota?.starter_tryons_left ?? 0} vĩnh viễn + {quota?.daily_remaining ?? 0} hôm nay)
+                    ({quota?.starter_tryons_left ?? 0} tích lũy + {quota?.daily_remaining ?? 0} miễn phí hôm nay)
                   </Text>
                 </Text>
               </View>
 
               <Text style={{ fontSize: 12, color: t.colors.muted, marginBottom: 12 }}>
-                Lượt thử đã nạp sẽ không giới hạn thời gian sử dụng và tự động tích lũy thăng hạng VIP ShopFit:
+                Lượt thử đã nạp không giới hạn thời gian sử dụng và tích lũy doanh số thăng hạng VIP ShopFit:
               </Text>
 
-              {/* Package cards */}
               <View style={{ gap: 10 }}>
-                {packages.map((pkg) => {
+                {packages.map(pkg => {
                   const isSelected = selectedId === pkg.id;
                   return (
                     <Pressable
                       key={pkg.id}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: isSelected }}
                       onPress={() => setSelectedId(pkg.id)}
                       style={[modalStyles.packageCard, isSelected && modalStyles.packageCardActive]}
                     >
@@ -163,15 +174,13 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
 
                       <View style={[s.between, { alignItems: 'flex-start' }]}>
                         <View style={{ flex: 1, paddingRight: 8 }}>
-                          <Text style={{ fontSize: 15, fontFamily: t.fonts.bold, color: t.colors.ink }}>
-                            {pkg.name}
-                          </Text>
+                          <Text style={{ fontSize: 15, fontFamily: t.fonts.bold, color: t.colors.ink }}>{pkg.name}</Text>
                           <Text style={{ fontSize: 13, color: t.colors.green, fontFamily: t.fonts.medium, marginTop: 2 }}>
                             +{pkg.tryons} lượt thử 4 góc AI
                           </Text>
                           {pkg.voucher_value > 0 && (
                             <Text style={{ fontSize: 11, color: t.colors.gold, fontFamily: t.fonts.medium, marginTop: 4 }}>
-                              🎁 Tặng voucher {money(pkg.voucher_value)} mua sắm
+                              🎁 Tặng voucher {money(pkg.voucher_value)} dùng tại Giỏ hàng
                             </Text>
                           )}
                         </View>
@@ -213,11 +222,10 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
                   <Image source={{ uri: order.qr_url }} style={modalStyles.qrImage} contentFit="contain" />
                 </View>
                 <Text style={{ fontSize: 12, color: t.colors.muted, marginTop: 8, textAlign: 'center' }}>
-                  Quét mã QR bằng App Ngân Hàng hoặc MoMo để thanh toán chính xác
+                  Quét mã QR bằng App Ngân Hàng hoặc MoMo để điền sẵn số tiền & nội dung
                 </Text>
               </View>
 
-              {/* Payment Details */}
               <View style={modalStyles.detailsCard}>
                 <View style={s.between}>
                   <Text style={modalStyles.detailLabel}>Ngân hàng:</Text>
@@ -225,7 +233,11 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
                 </View>
                 <View style={s.between}>
                   <Text style={modalStyles.detailLabel}>Số tài khoản:</Text>
-                  <Pressable onPress={() => copyToClipboard(order.bank_account, 'Số tài khoản')} style={modalStyles.copyRow}>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => void copyToClipboard(order.bank_account, 'Số tài khoản')}
+                    style={modalStyles.copyRow}
+                  >
                     <Text style={[modalStyles.detailValue, { fontFamily: t.fonts.bold }]}>{order.bank_account}</Text>
                     <Ionicons name="copy-outline" size={14} color={t.colors.green} />
                   </Pressable>
@@ -236,7 +248,11 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
                 </View>
                 <View style={s.between}>
                   <Text style={modalStyles.detailLabel}>Số tiền:</Text>
-                  <Pressable onPress={() => copyToClipboard(String(order.amount), 'Số tiền')} style={modalStyles.copyRow}>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => void copyToClipboard(String(order.amount), 'Số tiền')}
+                    style={modalStyles.copyRow}
+                  >
                     <Text style={[modalStyles.detailValue, { color: t.colors.green, fontFamily: t.fonts.bold }]}>
                       {money(order.amount)}
                     </Text>
@@ -245,35 +261,38 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
                 </View>
                 <View style={[s.between, { borderTopWidth: 1, borderTopColor: t.colors.line, paddingTop: 8 }]}>
                   <Text style={modalStyles.detailLabel}>Nội dung CK:</Text>
-                  <Pressable onPress={() => copyToClipboard(order.payment_code, 'Mã chuyển khoản')} style={modalStyles.codeBadge}>
-                    <Text style={{ fontSize: 14, fontFamily: t.fonts.bold, color: '#B34A00' }}>
-                      {order.payment_code}
-                    </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => void copyToClipboard(order.payment_code, 'Mã chuyển khoản')}
+                    style={modalStyles.codeBadge}
+                  >
+                    <Text style={{ fontSize: 14, fontFamily: t.fonts.bold, color: '#B34A00' }}>{order.payment_code}</Text>
                     <Ionicons name="copy-outline" size={14} color="#B34A00" />
                   </Pressable>
                 </View>
               </View>
 
-              {/* Status Indicator */}
-              <View style={modalStyles.pollingRow}>
-                <ActivityIndicator size="small" color={t.colors.green} />
-                <Text style={{ fontSize: 12, color: t.colors.ink, flex: 1, fontFamily: t.fonts.medium }}>
-                  Đang chờ hệ thống ngân hàng xác nhận...
+              <View style={[modalStyles.pollingRow, reportedPaid && { backgroundColor: '#FEF3C7' }]}>
+                <ActivityIndicator size="small" color={reportedPaid ? '#B45309' : t.colors.green} />
+                <Text style={{ fontSize: 12, color: reportedPaid ? '#92400E' : t.colors.ink, flex: 1, fontFamily: t.fonts.medium }}>
+                  {reportedPaid
+                    ? 'Đã báo chuyển khoản! Đang chờ hệ thống / Chủ shop duyệt và tự động cộng lượt...'
+                    : 'Đang chờ nhận chuyển khoản tự động qua VietQR...'}
                 </Text>
               </View>
 
-              {/* Confirm Buttons */}
               <Button
-                variant="primary"
-                onPress={() => void handleManualConfirm()}
+                variant={reportedPaid ? 'secondary' : 'primary'}
+                onPress={() => void handleReportPaid()}
                 loading={confirming}
+                disabled={reportedPaid}
                 icon="checkmark-circle-outline"
                 style={{ marginTop: 12 }}
               >
-                Tôi đã chuyển khoản thành công
+                {reportedPaid ? 'Đang chờ chủ shop xác nhận' : 'Tôi đã chuyển khoản thành công'}
               </Button>
 
-              <Pressable onPress={() => setStep('select')} style={{ alignItems: 'center', marginTop: 10, padding: 8 }}>
+              <Pressable onPress={() => { setReportedPaid(false); setStep('select'); }} style={{ alignItems: 'center', marginTop: 10, padding: 8 }}>
                 <Text style={{ fontSize: 13, color: t.colors.muted }}>Quay lại chọn gói khác</Text>
               </Pressable>
             </ScrollView>
@@ -285,11 +304,9 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
               <View style={modalStyles.successCircle}>
                 <Ionicons name="checkmark" size={38} color="#FFFFFF" />
               </View>
-              <Text style={{ fontSize: 20, fontFamily: t.fonts.bold, color: t.colors.ink }}>
-                Nạp Lượt Thành Công! 🎉
-              </Text>
+              <Text style={{ fontSize: 20, fontFamily: t.fonts.bold, color: t.colors.ink }}>Nạp Lượt Thành Công! 🎉</Text>
               <Text style={{ fontSize: 14, color: t.colors.muted, textAlign: 'center', lineHeight: 22, paddingHorizontal: 10 }}>
-                Bạn đã nhận được <Text style={{ fontFamily: t.fonts.bold, color: t.colors.green }}>+{completedTryons} lượt thử đồ AI</Text> và tích lũy doanh số lên hạng thành viên VIP!
+                Bạn đã nhận được <Text style={{ fontFamily: t.fonts.bold, color: t.colors.green }}>+{completedTryons} lượt thử đồ AI</Text> và tích lũy doanh số thành viên VIP!
               </Text>
 
               <Button variant="primary" onPress={handleClose} icon="sparkles" style={{ width: '100%', marginTop: 12 }}>
@@ -298,6 +315,7 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
             </View>
           )}
         </View>
+        <ToastOverlay />
       </View>
     </Modal>
   );

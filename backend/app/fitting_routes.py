@@ -76,14 +76,25 @@ def fitting_routes(db, settings, current_user, admin, service, analyzer):
             if chart.verified and (set(r.size for r in chart.rows) != set(sizes) or any(
                     getattr(r, key) is None for r in chart.rows for key in required_fields(row["tryon_category"]))):
                 raise HTTPException(400, "Cần đủ size và số đo bắt buộc trước khi xác nhận bảng đã đo thực tế.")
-            if chart.back_image_url and not (settings.data_dir / "catalog" / Path(chart.back_image_url).name).is_file():
-                raise HTTPException(400, "Ảnh mặt sau sản phẩm chưa được tải lên.")
+            existing_chart = json.loads(row["size_chart"] or "{}")
+            if "back_image_url" not in chart.model_fields_set and existing_chart.get("back_image_url"):
+                chart.back_image_url = existing_chart["back_image_url"]
+            if "detail_image_url" not in chart.model_fields_set and existing_chart.get("detail_image_url"):
+                chart.detail_image_url = existing_chart["detail_image_url"]
+            for extra_url in (chart.back_image_url, chart.detail_image_url):
+                if extra_url:
+                    fname = Path(extra_url).name
+                    if not (settings.data_dir / "catalog" / fname).is_file():
+                        service.storage.get_catalog(fname)
+                    if not (settings.data_dir / "catalog" / fname).is_file():
+                        raise HTTPException(400, "Ảnh phụ sản phẩm chưa được tải lên.")
             conn.execute("UPDATE products SET size_chart=? WHERE id=?", (chart.model_dump_json(), product_id))
             return db.product(conn, conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone())
 
     @api.post("/photo-check")
     async def check_photo(photo: Annotated[UploadFile, File()], user=Depends(current_user)):
-        image = normalize_image(await photo.read(MAX_UPLOAD + 1))
+        raw = await photo.read(MAX_UPLOAD + 1)
+        image = await run_in_threadpool(normalize_image, raw)
         return await run_in_threadpool(analyzer.check, user["id"], image)
 
     @api.post("/tryons/{job_id}/retry", status_code=202)
@@ -124,7 +135,8 @@ def fitting_routes(db, settings, current_user, admin, service, analyzer):
         fit_score: Annotated[int, Form(ge=1, le=5)], actual_fit: Annotated[Literal["tight", "fits", "loose"], Form()],
         notes: Annotated[str, Form(max_length=1000)] = "", user=Depends(current_user),
     ):
-        image = normalize_image(await photo.read(MAX_UPLOAD + 1))
+        raw = await photo.read(MAX_UPLOAD + 1)
+        image = await run_in_threadpool(normalize_image, raw)
         with db.connect() as conn:
             # Serialize against deletion so a concurrent upload cannot resurrect deleted personal files.
             db.begin_write(conn)
@@ -133,6 +145,7 @@ def fitting_routes(db, settings, current_user, admin, service, analyzer):
                 raise HTTPException(409, "Cần có ảnh AI hoàn tất trước khi đối chiếu.")
             path = settings.data_dir / "private" / f"{job_id}-actual.jpg"
             path.write_bytes(image)
+            service.storage.put_private(f"{job_id}-actual.jpg", image)
             conn.execute("""INSERT INTO tryon_evaluations VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (job_id)
                 DO UPDATE SET actual_path=excluded.actual_path,identity_score=excluded.identity_score,
                 garment_score=excluded.garment_score,fit_score=excluded.fit_score,actual_fit=excluded.actual_fit,

@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 import secrets
+import threading
 import time
 import urllib.parse
 import uuid
@@ -10,20 +11,19 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from .config import Settings
 from .db import Database, INTEGRITY_ERRORS, now
-from .security import hash_password, token_hash, verify_password
+from .security import hash_password, otp_digest, token_hash, verify_password
 from .tryon import MAX_UPLOAD, TryOnService, normalize_image
 from .photo_checks import PhotoAnalyzer
 from .fitting_routes import fitting_routes
-from .sizing import required_fields
+from .sizing import demo_chart
 from .insights import insight_routes
 from .ai_usage import AIUsage
 from .storage import StorageManager
@@ -107,6 +107,15 @@ class PushTokenRequest(BaseModel):
     push_token: str = Field(min_length=10, max_length=200)
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class ProfilePatchRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+
+
 class CreatePaymentOrder(BaseModel):
     package_id: str = Field(min_length=2, max_length=50)
 
@@ -123,7 +132,16 @@ class Checkout(BaseModel):
     phone: str = Field(pattern=r"^\+?[0-9\s.-]{9,16}$")
     address: str = Field(min_length=10, max_length=400)
     note: str = Field(default="", max_length=500)
+    voucher_code: str | None = Field(default=None, max_length=40)
     items: list[CartItem] = Field(min_length=1, max_length=30)
+
+    @field_validator("phone")
+    @classmethod
+    def valid_digits(cls, value: str):
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if not 9 <= len(digits) <= 13:
+            raise ValueError("Số điện thoại không hợp lệ")
+        return value.strip()
 
 
 class Color(BaseModel):
@@ -187,10 +205,48 @@ class ProductWrite(BaseModel):
 class ProductPatch(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=100)
     price: int | None = Field(default=None, gt=0, le=100_000_000)
+    original_price: int | None = Field(default=None, ge=0, le=100_000_000)
+    category: str | None = Field(default=None, min_length=1, max_length=50)
+    tryon_category: Literal["tops", "bottoms", "one-pieces"] | None = None
+    material: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, min_length=10, max_length=2000)
+    tag: str | None = Field(default=None, max_length=30)
+    image_url: str | None = Field(default=None, max_length=500)
+    colors: list[Color] | None = Field(default=None, min_length=1, max_length=10)
+    sizes: list[str] | None = Field(default=None, min_length=1, max_length=10)
     active: bool | None = None
+    featured: bool | None = None
     variants: list[VariantStock] | None = None
     back_image_url: str | None = None
     detail_image_url: str | None = None
+
+    @field_validator("image_url")
+    @classmethod
+    def check_main_image(cls, value):
+        if value is not None and not re.fullmatch(r"/media/[a-zA-Z0-9_-]+\.jpg", value):
+            raise ValueError("Ảnh đại diện sản phẩm không hợp lệ")
+        return value
+
+    @field_validator("back_image_url", "detail_image_url")
+    @classmethod
+    def check_extra_image(cls, value):
+        if value is not None and value != "" and not re.fullmatch(r"/media/[a-zA-Z0-9_-]+\.jpg", value):
+            raise ValueError("Ảnh phụ không hợp lệ")
+        return value
+
+    @field_validator("sizes")
+    @classmethod
+    def check_unique_sizes(cls, sizes):
+        if sizes is not None and (len(set(sizes)) != len(sizes) or any(not s.strip() or len(s) > 10 for s in sizes)):
+            raise ValueError("Size không hợp lệ")
+        return sizes
+
+    @field_validator("colors")
+    @classmethod
+    def check_unique_colors(cls, colors):
+        if colors is not None and len({c.name for c in colors}) != len(colors):
+            raise ValueError("Màu không được trùng")
+        return colors
 
 
 class StatusPatch(BaseModel):
@@ -309,16 +365,39 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             service.close()
             db.close()
 
-    app = FastAPI(title="ShopFit API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="ShopFit API", version="0.2.0", lifespan=lifespan)
     app.state.db = db
     app.state.storage = storage
     app.state.tryon = service
     app.state.photo_analyzer = analyzer
-    app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type", "X-Idempotency-Key"])
+    rate_buckets: dict[str, list[float]] = {}
+    rate_lock = threading.Lock()
+    app.state.rate_buckets = rate_buckets
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "X-Idempotency-Key", "X-Webhook-Secret"],
+    )
+
+    def check_rate_limit(key: str, limit: int, window_sec: int, message: str = "Thao tác quá nhanh. Vui lòng thử lại sau ít phút."):
+        now_ts = time.time()
+        with rate_lock:
+            hits = [t for t in rate_buckets.get(key, []) if now_ts - t < window_sec]
+            if len(hits) >= limit:
+                rate_buckets[key] = hits
+                raise HTTPException(429, message)
+            hits.append(now_ts)
+            rate_buckets[key] = hits
 
     @app.get("/media/{filename}")
     def get_media(filename: str):
-        path = settings.data_dir / "catalog" / filename
+        if not re.fullmatch(r"[a-zA-Z0-9_-]+\.(jpg|jpeg|png|webp)", filename):
+            raise HTTPException(404, "Không tìm thấy file ảnh.")
+        catalog_root = (settings.data_dir / "catalog").resolve()
+        path = (catalog_root / filename).resolve()
+        if path.parent != catalog_root:
+            raise HTTPException(404, "Không tìm thấy file ảnh.")
         if not path.is_file():
             storage.get_catalog(filename)
         if not path.is_file():
@@ -409,16 +488,45 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             return issue_session(conn, user)
 
     @app.post("/api/auth/login")
-    def login(body: Login):
+    def login(body: Login, request: Request):
+        client_ip = request.client.host if request.client else "local"
+        bucket_key = f"login:{body.email}:{client_ip}"
+        with rate_lock:
+            recent = [t for t in rate_buckets.get(bucket_key, []) if time.time() - t < 300]
+            if len(recent) >= 10:
+                raise HTTPException(429, "Bạn đã đăng nhập sai quá nhiều lần. Vui lòng thử lại sau 5 phút.")
         with db.connect() as conn:
-            user = conn.execute("SELECT * FROM users WHERE email=? OR email=? OR name=?", (body.email, f"{body.email}@shopfit.vn", body.email)).fetchone()
+            user = conn.execute("SELECT * FROM users WHERE email=? OR email=?", (body.email, f"{body.email}@shopfit.vn")).fetchone()
             if not user or not verify_password(body.password, user["password_hash"]):
+                check_rate_limit(bucket_key, 10, 300, "Bạn đã đăng nhập sai quá nhiều lần. Vui lòng thử lại sau 5 phút.")
                 raise HTTPException(401, "Tài khoản hoặc mật khẩu chưa đúng.")
+            with rate_lock:
+                rate_buckets.pop(bucket_key, None)
             return issue_session(conn, user)
 
     @app.get("/api/auth/me")
     def me(user=Depends(current_user)):
         return user
+
+    @app.patch("/api/auth/me")
+    def update_me(body: ProfilePatchRequest, user=Depends(current_user)):
+        new_name = body.name.strip()
+        with db.connect() as conn:
+            conn.execute("UPDATE users SET name=? WHERE id=?", (new_name, user["id"]))
+        return {**user, "name": new_name}
+
+    @app.post("/api/auth/change-password")
+    def change_password(body: ChangePasswordRequest, user=Depends(current_user), authorization: Annotated[str, Header()] = ""):
+        with db.connect() as conn:
+            db.begin_write(conn)
+            row = conn.execute("SELECT password_hash FROM users WHERE id=?", (user["id"],)).fetchone()
+            if not row or not verify_password(body.current_password, row["password_hash"]):
+                raise HTTPException(400, "Mật khẩu hiện tại chưa đúng.")
+            conn.execute("UPDATE users SET password_hash=? WHERE id=?", (hash_password(body.new_password), user["id"]))
+            # Revoke other sessions while keeping the current session active
+            if authorization.startswith("Bearer "):
+                conn.execute("DELETE FROM sessions WHERE user_id=? AND token_hash!=?", (user["id"], token_hash(authorization[7:])))
+        return {"message": "Đã đổi mật khẩu thành công."}
 
     @app.put("/api/auth/push-token")
     def update_push_token(body: PushTokenRequest, user=Depends(current_user)):
@@ -437,7 +545,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
 
             today_prefix = now()[:10]
             used_today = conn.execute(
-                "SELECT count(*) FROM tryons WHERE user_id=? AND created_at LIKE ? AND deleted=0 AND status != 'failed'",
+                "SELECT count(*) FROM tryons WHERE user_id=? AND created_at LIKE ? AND quota_source='daily' AND status != 'failed'",
                 (user["id"], f"{today_prefix}%")
             ).fetchone()[0]
 
@@ -517,24 +625,96 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     def confirm_payment(transaction_id: str, user=Depends(current_user)):
         with db.connect() as conn:
             db.begin_write(conn)
+            if user["role"] == "admin":
+                row = conn.execute("SELECT * FROM payment_transactions WHERE id=?", (transaction_id,)).fetchone()
+                if not row:
+                    raise HTTPException(404, "Không tìm thấy giao dịch.")
+                return complete_payment_transaction(conn, row, settings)
             row = conn.execute("SELECT * FROM payment_transactions WHERE id=? AND user_id=?", (transaction_id, user["id"])).fetchone()
             if not row:
                 raise HTTPException(404, "Không tìm thấy giao dịch.")
-            result = complete_payment_transaction(conn, row, settings)
-            return result
+            if row["status"] == "completed":
+                return {"status": "completed", "tryons": row["tryons"]}
+            if row["status"] == "rejected":
+                raise HTTPException(400, "Giao dịch này đã bị từ chối đối soát. Vui lòng tạo giao dịch mới hoặc liên hệ shop.")
+            conn.execute("UPDATE payment_transactions SET status='verifying' WHERE id=? AND status='pending'", (transaction_id,))
+            return {
+                "status": "verifying",
+                "tryons": row["tryons"],
+                "message": "Đã ghi nhận thông báo chuyển khoản. Chủ shop sẽ đối soát và cộng lượt ngay cho bạn!",
+            }
+
+    @app.get("/api/admin/payments")
+    def admin_list_payments(user=Depends(admin)):
+        with db.connect() as conn:
+            rows = conn.execute("""
+                SELECT pt.*, u.name as user_name, u.email as user_email, tp.name as package_name
+                FROM payment_transactions pt
+                LEFT JOIN users u ON pt.user_id = u.id
+                LEFT JOIN token_packages tp ON pt.package_id = tp.id
+                ORDER BY CASE WHEN pt.status='verifying' THEN 0 WHEN pt.status='pending' THEN 1 ELSE 2 END, pt.created_at DESC
+                LIMIT 50
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    @app.post("/api/admin/payments/{transaction_id}/approve")
+    def admin_approve_payment(transaction_id: str, user=Depends(admin)):
+        with db.connect() as conn:
+            db.begin_write(conn)
+            row = conn.execute("SELECT * FROM payment_transactions WHERE id=?", (transaction_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "Không tìm thấy giao dịch.")
+            if row["status"] == "rejected":
+                raise HTTPException(409, "Giao dịch đã từ chối không thể duyệt lại.")
+            return complete_payment_transaction(conn, row, settings)
+
+    @app.post("/api/admin/payments/{transaction_id}/reject")
+    def admin_reject_payment(transaction_id: str, user=Depends(admin)):
+        with db.connect() as conn:
+            db.begin_write(conn)
+            row = conn.execute("SELECT * FROM payment_transactions WHERE id=?", (transaction_id,)).fetchone()
+            if not row:
+                raise HTTPException(404, "Không tìm thấy giao dịch.")
+            if row["status"] == "completed":
+                raise HTTPException(409, "Giao dịch đã hoàn tất không thể từ chối.")
+            conn.execute("UPDATE payment_transactions SET status='rejected' WHERE id=?", (transaction_id,))
+            return {"status": "rejected"}
 
     @app.post("/api/payment/webhook")
-    def payment_webhook(body: dict):
+    def payment_webhook(
+        body: dict,
+        authorization: Annotated[str | None, Header()] = None,
+        x_webhook_secret: Annotated[str | None, Header(alias="X-Webhook-Secret")] = None,
+    ):
+        if not settings.payment_webhook_secret:
+            raise HTTPException(503, "Webhook thanh toán chưa được cấu hình khóa bảo mật.")
+        supplied = (x_webhook_secret or "").strip()
+        if not supplied and authorization:
+            for prefix in ("Apikey ", "Bearer "):
+                if authorization.startswith(prefix):
+                    supplied = authorization[len(prefix):].strip()
+                    break
+        if not supplied or not hmac.compare_digest(supplied, settings.payment_webhook_secret):
+            raise HTTPException(401, "Chữ ký hoặc khóa Webhook không hợp lệ.")
+
         text = f"{body.get('content', '')} {body.get('description', '')} {body.get('code', '')}"
         match = re.search(r"FIT[A-Z0-9]{6}", text.upper())
         if not match:
             return {"status": "ignored", "reason": "No matching payment code"}
         code = match.group(0)
+        raw_amount = body.get("transferAmount") if body.get("transferAmount") is not None else body.get("amount")
+        try:
+            paid_amount = int(raw_amount) if raw_amount is not None else 0
+        except (TypeError, ValueError):
+            paid_amount = 0
+
         with db.connect() as conn:
             db.begin_write(conn)
-            row = conn.execute("SELECT * FROM payment_transactions WHERE payment_code=? AND status='pending'", (code,)).fetchone()
+            row = conn.execute("SELECT * FROM payment_transactions WHERE payment_code=? AND status IN ('pending', 'verifying')", (code,)).fetchone()
             if not row:
                 return {"status": "ignored", "reason": "Transaction not found or already completed"}
+            if paid_amount < row["amount"]:
+                return {"status": "ignored", "reason": "Insufficient transfer amount"}
             result = complete_payment_transaction(conn, row, settings)
             return result
 
@@ -555,6 +735,9 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
         files_to_delete = []
         with db.connect() as conn:
             db.begin_write(conn)
+            running = conn.execute("SELECT count(*) FROM tryons WHERE user_id=? AND status IN ('queued', 'processing')", (uid,)).fetchone()[0]
+            if running > 0:
+                raise HTTPException(409, "Vui lòng chờ lượt thử đồ đang xử lý hoàn tất trước khi xóa tài khoản.")
             rows = conn.execute("SELECT id, views FROM tryons WHERE user_id=?", (uid,)).fetchall()
             for r in rows:
                 job_id = r["id"]
@@ -563,15 +746,21 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 files_to_delete.append(f"{job_id}-actual.jpg")
                 for a in ("front", "left", "back", "right"):
                     files_to_delete.append(f"{job_id}-{a}.jpg")
+                for view in json.loads(r["views"] or "{}").values():
+                    for p_str in (view.get("path"), view.get("candidate_path")):
+                        if p_str:
+                            Path(p_str).unlink(missing_ok=True)
             conn.execute("DELETE FROM tryon_evaluations WHERE job_id IN (SELECT id FROM tryons WHERE user_id=?)", (uid,))
             conn.execute("DELETE FROM retry_requests WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM tryons WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM photo_checks WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM body_profiles WHERE user_id=?", (uid,))
-            conn.execute("DELETE FROM reports WHERE user_id=?", (uid,))
+            conn.execute("UPDATE reports SET user_id=NULL WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM wardrobe WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM fit_reviews WHERE user_id=?", (uid,))
-            conn.execute("UPDATE orders SET customer_name='Người dùng đã xóa', phone='', address='', note='' WHERE user_id=?", (uid,))
+            conn.execute("DELETE FROM user_vouchers WHERE user_id=?", (uid,))
+            conn.execute("UPDATE payment_transactions SET user_id=NULL WHERE user_id=?", (uid,))
+            conn.execute("UPDATE orders SET user_id=NULL, customer_name='Người dùng đã xóa', phone='', address='', note='' WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
             conn.execute("DELETE FROM users WHERE id=?", (uid,))
 
@@ -583,25 +772,29 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
         return {"message": "Tài khoản và toàn bộ dữ liệu cá nhân của bạn đã được xóa vĩnh viễn."}
 
     @app.post("/api/auth/forgot-password")
-    def forgot_password(body: ForgotPasswordRequest):
+    def forgot_password(body: ForgotPasswordRequest, request: Request):
+        client_ip = request.client.host if request.client else "local"
+        check_rate_limit(f"forgot-ip:{client_ip}", 8, 900, "Bạn đã yêu cầu gửi mã OTP quá nhiều lần. Vui lòng thử lại sau 15 phút.")
+        check_rate_limit(f"forgot-email:{body.email}", 1, 55, "Vui lòng đợi khoảng 60 giây trước khi yêu cầu gửi lại mã OTP.")
+        otp = None
         with db.connect() as conn:
+            db.begin_write(conn)
             user = conn.execute("SELECT id, email FROM users WHERE email=?", (body.email,)).fetchone()
-            if not user:
-                return {"message": "Nếu email tồn tại trong hệ thống, mã xác nhận OTP đã được gửi đến bạn."}
-            otp = f"{secrets.randbelow(900000) + 100000}"
-            otp_h = token_hash(otp)
-            expires_at = int(time.time()) + 900
-            conn.execute("""INSERT INTO password_resets (email, otp_hash, expires_at, attempts, created_at)
-                VALUES (?, ?, ?, 0, ?)
-                ON CONFLICT(email) DO UPDATE SET otp_hash=excluded.otp_hash, expires_at=excluded.expires_at, attempts=0, created_at=excluded.created_at""",
-                (body.email, otp_h, expires_at, now()))
+            if user:
+                otp = f"{secrets.randbelow(900000) + 100000}"
+                otp_h = otp_digest(body.email, otp, settings.otp_secret)
+                expires_at = int(time.time()) + 900
+                conn.execute("""INSERT INTO password_resets (email, otp_hash, expires_at, attempts, created_at)
+                    VALUES (?, ?, ?, 0, ?)
+                    ON CONFLICT(email) DO UPDATE SET otp_hash=excluded.otp_hash, expires_at=excluded.expires_at, attempts=0, created_at=excluded.created_at""",
+                    (body.email, otp_h, expires_at, now()))
 
-        # Send real OTP email
-        sent = send_otp_email(body.email, otp, settings)
-        if not sent and settings.smtp_host:
-            raise HTTPException(500, "Không thể gửi email lúc này. Vui lòng kiểm tra lại cấu hình email hoặc thử lại sau.")
+        if otp is not None:
+            sent = send_otp_email(body.email, otp, settings)
+            if not sent:
+                raise HTTPException(503, "Không thể gửi email xác thực lúc này. Vui lòng kiểm tra cấu hình dịch vụ email hoặc thử lại sau.")
 
-        return {"message": "Mã xác thực OTP đã được gửi đến email của bạn. Vui lòng kiểm tra hộp thư đến (hoặc hòm thư rác/spam)."}
+        return {"message": "Nếu email đã đăng ký trên hệ thống, mã xác thực OTP 6 chữ số đã được gửi tới hộp thư của bạn."}
 
     @app.post("/api/auth/verify-otp")
     def verify_otp(body: VerifyOtpRequest):
@@ -616,7 +809,8 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             if reset_row["attempts"] >= 5:
                 conn.execute("DELETE FROM password_resets WHERE email=?", (body.email,))
                 raise HTTPException(429, "Bạn đã nhập sai mã quá 5 lần. Vui lòng yêu cầu mã mới.")
-            if not hmac.compare_digest(reset_row["otp_hash"], token_hash(body.otp.strip())):
+            expected = otp_digest(body.email, body.otp, settings.otp_secret)
+            if not hmac.compare_digest(reset_row["otp_hash"], expected):
                 conn.execute("UPDATE password_resets SET attempts = attempts + 1 WHERE email=?", (body.email,))
                 raise HTTPException(400, "Mã OTP không chính xác. Vui lòng kiểm tra lại.")
             return {"status": "ok", "message": "Mã xác thực OTP chính xác."}
@@ -634,7 +828,8 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             if reset_row["attempts"] >= 5:
                 conn.execute("DELETE FROM password_resets WHERE email=?", (body.email,))
                 raise HTTPException(429, "Bạn đã nhập sai mã quá 5 lần. Vui lòng yêu cầu mã mới.")
-            if not hmac.compare_digest(reset_row["otp_hash"], token_hash(body.otp.strip())):
+            expected = otp_digest(body.email, body.otp, settings.otp_secret)
+            if not hmac.compare_digest(reset_row["otp_hash"], expected):
                 conn.execute("UPDATE password_resets SET attempts = attempts + 1 WHERE email=?", (body.email,))
                 raise HTTPException(400, "Mã OTP không chính xác. Vui lòng kiểm tra lại.")
             conn.execute("UPDATE users SET password_hash=? WHERE email=?", (hash_password(body.new_password), body.email))
@@ -647,7 +842,8 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     @app.get("/api/products")
     def products():
         with db.connect() as conn:
-            return [db.product(conn, row) for row in conn.execute("SELECT * FROM products WHERE active=1 ORDER BY featured DESC, created_at, id")]
+            rows = conn.execute("SELECT * FROM products WHERE active=1 ORDER BY featured DESC, created_at, id").fetchall()
+            return db.products_bulk(conn, rows)
 
     @app.get("/api/products/{product_id}")
     def product(product_id: str):
@@ -660,39 +856,45 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     @app.get("/api/admin/products")
     def admin_products(user=Depends(admin)):
         with db.connect() as conn:
-            return [db.product(conn, row) for row in conn.execute("SELECT * FROM products ORDER BY created_at DESC, id DESC")]
+            rows = conn.execute("SELECT * FROM products ORDER BY created_at DESC, id DESC").fetchall()
+            return db.products_bulk(conn, rows)
 
     @app.post("/api/admin/upload", status_code=201)
     async def upload(file: Annotated[UploadFile, File()], user=Depends(admin)):
-        content = normalize_image(await file.read(MAX_UPLOAD + 1))
+        raw = await file.read(MAX_UPLOAD + 1)
+        content = await run_in_threadpool(normalize_image, raw)
         filename = f"{uuid.uuid4().hex}.jpg"
         storage.put_catalog(filename, content)
         return {"url": f"/media/{filename}"}
 
-    @app.post("/api/admin/products", status_code=201)
-    def add_product(body: ProductWrite, user=Depends(admin)):
-        fname = body.image_url.rsplit("/", 1)[-1]
+    def ensure_catalog_file(url: str, err_msg: str):
+        fname = url.rsplit("/", 1)[-1]
         if not (settings.data_dir / "catalog" / fname).is_file():
             storage.get_catalog(fname)
         if not (settings.data_dir / "catalog" / fname).is_file():
-            raise HTTPException(400, "Ảnh sản phẩm không tồn tại.")
+            raise HTTPException(400, err_msg)
+
+    @app.post("/api/admin/products", status_code=201)
+    def add_product(body: ProductWrite, user=Depends(admin)):
+        ensure_catalog_file(body.image_url, "Ảnh sản phẩm không tồn tại.")
         if body.back_image_url:
-            bfname = body.back_image_url.rsplit("/", 1)[-1]
-            if not (settings.data_dir / "catalog" / bfname).is_file():
-                storage.get_catalog(bfname)
+            ensure_catalog_file(body.back_image_url, "Ảnh mặt sau sản phẩm không tồn tại.")
         if body.detail_image_url:
-            dfname = body.detail_image_url.rsplit("/", 1)[-1]
-            if not (settings.data_dir / "catalog" / dfname).is_file():
-                storage.get_catalog(dfname)
+            ensure_catalog_file(body.detail_image_url, "Ảnh cận chất vải sản phẩm không tồn tại.")
         pid = uuid.uuid4().hex
         stock_map = {f"{vs.size}:{vs.color}": vs.stock for vs in (body.variant_stocks or [])}
-        chart_data = {"rows": [], "verified": False, "ease": {"chest_cm": 8, "waist_cm": 4, "hip_cm": 6}}
+        chart_data = demo_chart({
+            "sizes": body.sizes,
+            "tryon_category": body.tryon_category,
+            "category": body.category,
+        })
         if body.back_image_url:
             chart_data["back_image_url"] = body.back_image_url
         if body.detail_image_url:
             chart_data["detail_image_url"] = body.detail_image_url
 
         with db.connect() as conn:
+            db.begin_write(conn)
             conn.execute("""INSERT INTO products (id,name,category,tryon_category,price,original_price,image_url,tag,material,description,colors,sizes,featured,size_chart,created_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (pid, body.name, body.category, body.tryon_category, body.price, body.original_price,
                     body.image_url, body.tag, body.material, body.description, json.dumps([c.model_dump() for c in body.colors]), json.dumps(body.sizes), body.featured, json.dumps(chart_data), now()))
@@ -704,25 +906,77 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
 
     @app.patch("/api/admin/products/{product_id}")
     def update_product(product_id: str, body: ProductPatch, user=Depends(admin)):
+        if body.image_url is not None:
+            ensure_catalog_file(body.image_url, "Ảnh đại diện sản phẩm không tồn tại.")
+        if body.back_image_url:
+            ensure_catalog_file(body.back_image_url, "Ảnh mặt sau sản phẩm không tồn tại.")
+        if body.detail_image_url:
+            ensure_catalog_file(body.detail_image_url, "Ảnh cận chất vải sản phẩm không tồn tại.")
+
         with db.connect() as conn:
+            db.begin_write(conn)
             row = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
             if not row:
                 raise HTTPException(404, "Không tìm thấy sản phẩm.")
-            for field in ("name", "price", "active"):
+            for field in ("name", "price", "category", "tryon_category", "material", "description", "tag", "image_url", "active", "featured"):
                 value = getattr(body, field)
                 if value is not None:
                     conn.execute(f"UPDATE products SET {field}=? WHERE id=?", (value, product_id))
-            if body.back_image_url is not None or body.detail_image_url is not None:
-                chart = json.loads(row["size_chart"] or "{}")
-                if body.back_image_url is not None:
-                    chart["back_image_url"] = body.back_image_url if body.back_image_url != "" else None
-                if body.detail_image_url is not None:
-                    chart["detail_image_url"] = body.detail_image_url if body.detail_image_url != "" else None
+            if body.original_price is not None:
+                conn.execute("UPDATE products SET original_price=? WHERE id=?", (body.original_price if body.original_price > 0 else None, product_id))
+
+            current_colors = json.loads(row["colors"])
+            current_sizes = json.loads(row["sizes"])
+            target_colors = [c.model_dump() for c in body.colors] if body.colors is not None else current_colors
+            target_sizes = body.sizes if body.sizes is not None else current_sizes
+            colors_or_sizes_changed = (body.colors is not None or body.sizes is not None)
+
+            if body.colors is not None:
+                conn.execute("UPDATE products SET colors=? WHERE id=?", (json.dumps(target_colors), product_id))
+            if body.sizes is not None:
+                conn.execute("UPDATE products SET sizes=? WHERE id=?", (json.dumps(target_sizes), product_id))
+
+            chart = json.loads(row["size_chart"] or "{}")
+            chart_dirty = False
+            if body.back_image_url is not None:
+                chart["back_image_url"] = body.back_image_url if body.back_image_url != "" else None
+                chart_dirty = True
+            if body.detail_image_url is not None:
+                chart["detail_image_url"] = body.detail_image_url if body.detail_image_url != "" else None
+                chart_dirty = True
+            if body.sizes is not None:
+                existing_rows = {r["size"]: r for r in chart.get("rows", [])}
+                template = demo_chart({
+                    "sizes": target_sizes,
+                    "tryon_category": body.tryon_category or row["tryon_category"],
+                    "category": body.category or row["category"],
+                })["rows"]
+                tmpl_map = {r["size"]: r for r in template}
+                chart["rows"] = [existing_rows.get(sz, tmpl_map[sz]) for sz in target_sizes]
+                if set(target_sizes) != set(current_sizes):
+                    chart["verified"] = False
+                chart_dirty = True
+            if chart_dirty:
                 conn.execute("UPDATE products SET size_chart=? WHERE id=?", (json.dumps(chart), product_id))
-            for v in body.variants or []:
-                result = conn.execute("UPDATE variants SET stock=? WHERE product_id=? AND size=? AND color=?", (v.stock, product_id, v.size, v.color))
-                if result.rowcount != 1:
-                    raise HTTPException(400, "Biến thể màu/size không tồn tại.")
+
+            if colors_or_sizes_changed:
+                valid_color_names = [c["name"] for c in target_colors]
+                existing_stocks = {
+                    (v["size"], v["color"]): v["stock"]
+                    for v in conn.execute("SELECT size, color, stock FROM variants WHERE product_id=?", (product_id,))
+                }
+                supplied_stocks = {(v.size, v.color): v.stock for v in (body.variants or [])}
+                conn.execute("DELETE FROM variants WHERE product_id=?", (product_id,))
+                for sz in target_sizes:
+                    for cname in valid_color_names:
+                        st = supplied_stocks.get((sz, cname), existing_stocks.get((sz, cname), 10))
+                        conn.execute("INSERT INTO variants VALUES (?,?,?,?)", (product_id, sz, cname, st))
+            else:
+                for v in body.variants or []:
+                    result = conn.execute("UPDATE variants SET stock=? WHERE product_id=? AND size=? AND color=?", (v.stock, product_id, v.size, v.color))
+                    if result.rowcount != 1:
+                        raise HTTPException(400, "Biến thể màu/size không tồn tại.")
+
             return db.product(conn, conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone())
 
     def serialize_order(conn, row):
@@ -734,6 +988,30 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
         data.pop("request_key", None)
         data.pop("request_fingerprint", None)
         return {**data, "items": items}
+
+    def serialize_orders_bulk(conn, rows):
+        rows = list(rows)
+        if not rows:
+            return []
+        oids = [r["id"] for r in rows]
+        ph = ",".join("?" for _ in oids)
+        all_items = [dict(i) for i in conn.execute(f"SELECT * FROM order_items WHERE order_id IN ({ph}) ORDER BY id", tuple(oids))]
+        reviews_by_item: dict[int, dict] = {}
+        if all_items:
+            iids = [i["id"] for i in all_items]
+            iph = ",".join("?" for _ in iids)
+            for rev in conn.execute(f"SELECT order_item_id,actual_fit,notes,updated_at FROM fit_reviews WHERE order_item_id IN ({iph})", tuple(iids)):
+                reviews_by_item[rev["order_item_id"]] = {"actual_fit": rev["actual_fit"], "notes": rev["notes"], "updated_at": rev["updated_at"]}
+        items_by_order: dict[str, list[dict]] = {oid: [] for oid in oids}
+        for item in all_items:
+            items_by_order[item["order_id"]].append({**item, "fit_review": reviews_by_item.get(item["id"])})
+        result = []
+        for r in rows:
+            data = dict(r)
+            data.pop("request_key", None)
+            data.pop("request_fingerprint", None)
+            result.append({**data, "items": items_by_order[r["id"]]})
+        return result
 
     @app.post("/api/orders", status_code=201)
     def checkout(body: Checkout, request_key: Annotated[str | None, Header(alias="X-Idempotency-Key", min_length=16, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")] = None, user=Depends(current_user)):
@@ -748,7 +1026,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                         raise HTTPException(409, "Mã đặt hàng đã dùng cho nội dung khác.")
                     return serialize_order(conn, existing)
             lines = []
-            total = 0
+            subtotal = 0
             for item in body.items:
                 p = conn.execute("SELECT * FROM products WHERE id=? AND active=1", (item.product_id,)).fetchone()
                 if not p:
@@ -756,28 +1034,52 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 changed = conn.execute("UPDATE variants SET stock=stock-? WHERE product_id=? AND size=? AND color=? AND stock>=?", (item.quantity, item.product_id, item.size, item.color, item.quantity))
                 if changed.rowcount != 1:
                     raise HTTPException(409, f"{p['name']} ({item.size}, {item.color}) không đủ hàng.")
-                total += p["price"] * item.quantity
+                subtotal += p["price"] * item.quantity
                 lines.append((item, p))
-            conn.execute("""INSERT INTO orders (id,user_id,customer_name,phone,address,note,total,created_at,request_key,request_fingerprint)
-                VALUES (?,?,?,?,?,?,?,?,?,?)""", (oid, user["id"], body.customer_name.strip(), body.phone, body.address.strip(), body.note, total, now(), request_key, fingerprint))
+
+            u_row = conn.execute("SELECT vip_tier FROM users WHERE id=?", (user["id"],)).fetchone()
+            tier_key = (u_row["vip_tier"] if u_row and u_row["vip_tier"] else "bronze")
+            vip_pct = VIP_TIERS.get(tier_key, VIP_TIERS["bronze"])["discount_percent"]
+            vip_discount = round(subtotal * vip_pct / 100)
+
+            voucher_discount = 0
+            applied_voucher_code = None
+            if body.voucher_code and body.voucher_code.strip():
+                vcode = body.voucher_code.strip().upper()
+                v_row = conn.execute(
+                    "SELECT * FROM user_vouchers WHERE user_id=? AND UPPER(code)=? AND used=0",
+                    (user["id"], vcode),
+                ).fetchone()
+                if not v_row:
+                    raise HTTPException(400, "Mã giảm giá không hợp lệ hoặc đã được sử dụng.")
+                if v_row["expires_at"] < now():
+                    raise HTTPException(400, "Mã giảm giá đã hết hạn.")
+                if subtotal < v_row["min_order"]:
+                    raise HTTPException(400, f"Đơn hàng cần tối thiểu {v_row['min_order']:,}₫ để áp dụng mã này.")
+                voucher_discount = v_row["discount_amount"]
+                applied_voucher_code = v_row["code"]
+                conn.execute("UPDATE user_vouchers SET used=1 WHERE id=?", (v_row["id"],))
+
+            discount_amount = min(subtotal, vip_discount + voucher_discount)
+            total = max(0, subtotal - discount_amount)
+
+            conn.execute("""INSERT INTO orders (id,user_id,customer_name,phone,address,note,total,subtotal,discount_amount,voucher_code,created_at,request_key,request_fingerprint)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (oid, user["id"], body.customer_name.strip(), body.phone, body.address.strip(), body.note, total, subtotal, discount_amount, applied_voucher_code, now(), request_key, fingerprint))
             for item, p in lines:
                 conn.execute("""INSERT INTO order_items (order_id,product_id,name,image_url,size,color,quantity,price)
                     VALUES (?,?,?,?,?,?,?,?)""", (oid, p["id"], p["name"], p["image_url"], item.size, item.color, item.quantity, p["price"]))
-            conn.execute("UPDATE users SET total_spent = COALESCE(total_spent, 0) + ? WHERE id=?", (total, user["id"]))
-            new_spent_row = conn.execute("SELECT total_spent FROM users WHERE id=?", (user["id"],)).fetchone()
-            new_spent = new_spent_row[0] if new_spent_row and new_spent_row[0] else 0
-            conn.execute("UPDATE users SET vip_tier=? WHERE id=?", (calculate_tier(new_spent), user["id"]))
             return serialize_order(conn, conn.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone())
 
     @app.get("/api/orders")
     def orders(user=Depends(current_user)):
         with db.connect() as conn:
-            rows = conn.execute("SELECT * FROM orders ORDER BY created_at DESC") if user["role"] == "admin" else conn.execute("SELECT * FROM orders WHERE user_id=? ORDER BY created_at DESC", (user["id"],))
-            return [serialize_order(conn, row) for row in rows]
+            rows = conn.execute("SELECT * FROM orders ORDER BY created_at DESC LIMIT 200") if user["role"] == "admin" else conn.execute("SELECT * FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 100", (user["id"],))
+            return serialize_orders_bulk(conn, rows)
 
     @app.patch("/api/orders/{order_id}")
     def order_status(order_id: str, body: StatusPatch, user=Depends(current_user)):
         transitions = {"pending": {"confirmed", "cancelled"}, "confirmed": {"shipping", "cancelled"}, "shipping": {"completed", "cancelled"}, "completed": set(), "cancelled": set()}
+        push_target = None
         with db.connect() as conn:
             db.begin_write(conn)
             order = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
@@ -787,22 +1089,62 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 raise HTTPException(403, "Bạn chỉ có thể hủy đơn đang chờ xác nhận.")
             if body.status not in transitions[order["status"]]:
                 raise HTTPException(409, "Không thể chuyển đơn sang trạng thái này.")
+            order_dict = dict(order)
             if body.status == "cancelled":
                 for item in conn.execute("SELECT * FROM order_items WHERE order_id=?", (order_id,)):
                     conn.execute("UPDATE variants SET stock=stock+? WHERE product_id=? AND size=? AND color=?", (item["quantity"], item["product_id"], item["size"], item["color"]))
+                if order_dict.get("voucher_code") and order_dict.get("user_id"):
+                    conn.execute("UPDATE user_vouchers SET used=0 WHERE user_id=? AND code=?", (order_dict["user_id"], order_dict["voucher_code"]))
+            elif body.status == "completed" and order_dict.get("user_id"):
+                conn.execute("UPDATE users SET total_spent = COALESCE(total_spent, 0) + ? WHERE id=?", (order_dict["total"], order_dict["user_id"]))
+                spent_row = conn.execute("SELECT total_spent FROM users WHERE id=?", (order_dict["user_id"],)).fetchone()
+                new_spent = spent_row[0] if spent_row and spent_row[0] else 0
+                conn.execute("UPDATE users SET vip_tier=? WHERE id=?", (calculate_tier(new_spent), order_dict["user_id"]))
+
             conn.execute("UPDATE orders SET status=? WHERE id=?", (body.status, order_id))
-            return serialize_order(conn, conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())
+            if user["role"] == "admin" and order_dict.get("user_id"):
+                u_push = conn.execute("SELECT push_token FROM users WHERE id=?", (order_dict["user_id"],)).fetchone()
+                if u_push and u_push["push_token"]:
+                    push_target = u_push["push_token"]
+            updated_order = serialize_order(conn, conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())
+
+        if push_target:
+            status_msgs = {
+                "confirmed": ("Đơn hàng đã được xác nhận ✨", f"Đơn SF · {order_id[:8].upper()} đang được ShopFit chuẩn bị đóng gói."),
+                "shipping": ("Đơn hàng đang giao đến bạn 🚚", f"Đơn SF · {order_id[:8].upper()} đã bàn giao cho đơn vị vận chuyển."),
+                "completed": ("Giao hàng thành công 🎉", f"Cảm ơn bạn đã mua sắm tại ShopFit! Đừng quên đánh giá độ vừa size nhé."),
+                "cancelled": ("Đơn hàng đã hủy", f"Đơn SF · {order_id[:8].upper()} đã được hủy."),
+            }
+            if body.status in status_msgs:
+                title, msg = status_msgs[body.status]
+                try:
+                    send_push_notification(push_target, title, msg, {"screen": "/orders", "orderId": order_id})
+                except Exception:
+                    pass
+        return updated_order
 
     @app.get("/api/admin/summary")
     def summary(user=Depends(admin)):
         with db.connect() as conn:
-            total_orders = conn.execute("SELECT count(*) FROM orders").fetchone()[0]
             completed_tryons = conn.execute("SELECT count(*) FROM tryons WHERE status='completed'").fetchone()[0]
-            conversion_rate = round((total_orders / completed_tryons * 100), 1) if completed_tryons > 0 else 0.0
+            tryon_users = conn.execute("SELECT count(DISTINCT user_id) FROM tryons WHERE status IN ('completed', 'partial')").fetchone()[0]
+            converted_users = conn.execute("""
+                SELECT count(DISTINCT o.user_id)
+                FROM orders o
+                WHERE o.user_id IS NOT NULL AND o.status != 'cancelled'
+                  AND EXISTS (
+                      SELECT 1 FROM order_items oi
+                      JOIN tryons t ON t.product_id = oi.product_id AND t.user_id = o.user_id
+                      WHERE oi.order_id = o.id AND t.status IN ('completed', 'partial') AND t.created_at <= o.created_at
+                  )
+            """).fetchone()[0]
+            conversion_rate = min(100.0, round((converted_users / tryon_users * 100), 1)) if tryon_users > 0 else 0.0
             low_stock_count = conn.execute("SELECT count(DISTINCT product_id) FROM variants WHERE stock <= 3").fetchone()[0]
+            pending_payments = conn.execute("SELECT count(*) FROM payment_transactions WHERE status='verifying'").fetchone()[0]
             return {
                 "products": conn.execute("SELECT count(*) FROM products WHERE active=1").fetchone()[0],
                 "pending_orders": conn.execute("SELECT count(*) FROM orders WHERE status='pending'").fetchone()[0],
+                "pending_payments": pending_payments,
                 "revenue": conn.execute("SELECT coalesce(sum(total),0) FROM orders WHERE status='completed'").fetchone()[0],
                 "tryons": completed_tryons,
                 "conversion_rate": conversion_rate,
@@ -815,7 +1157,16 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             rows = conn.execute("""
                 SELECT 
                     p.id, p.name, p.category, p.image_url, p.price,
-                    (SELECT count(*) FROM tryons t WHERE t.product_id = p.id AND t.status = 'completed') as tryon_count,
+                    (SELECT count(*) FROM tryons t WHERE t.product_id = p.id AND t.status IN ('completed', 'partial')) as tryon_count,
+                    (SELECT count(DISTINCT t.user_id) FROM tryons t WHERE t.product_id = p.id AND t.status IN ('completed', 'partial')) as tryon_users,
+                    (SELECT count(DISTINCT o.user_id) FROM order_items oi
+                     JOIN orders o ON oi.order_id = o.id
+                     WHERE oi.product_id = p.id AND o.user_id IS NOT NULL AND o.status != 'cancelled'
+                       AND EXISTS (
+                           SELECT 1 FROM tryons t
+                           WHERE t.user_id = o.user_id AND t.product_id = p.id
+                             AND t.status IN ('completed', 'partial') AND t.created_at <= o.created_at
+                       )) as converted_users,
                     (SELECT COALESCE(sum(oi.quantity), 0) FROM order_items oi 
                      JOIN orders o ON oi.order_id = o.id 
                      WHERE oi.product_id = p.id AND o.status != 'cancelled') as order_count
@@ -823,10 +1174,16 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 WHERE p.active = 1
             """).fetchall()
             items = []
+            total_tryon_users = 0
+            total_converted_users = 0
             for r in rows:
                 t_cnt = r["tryon_count"]
+                t_users = r["tryon_users"]
+                c_users = r["converted_users"]
                 o_cnt = r["order_count"]
-                rate = round((o_cnt / t_cnt * 100), 1) if t_cnt > 0 else 0.0
+                total_tryon_users += t_users
+                total_converted_users += c_users
+                rate = min(100.0, round((c_users / t_users * 100), 1)) if t_users > 0 else 0.0
                 items.append({
                     "product_id": r["id"],
                     "name": r["name"],
@@ -840,7 +1197,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             by_tryon = sorted(items, key=lambda x: (x["tryon_count"], x["order_count"]), reverse=True)
             total_tryons = sum(x["tryon_count"] for x in items)
             total_orders = sum(x["order_count"] for x in items)
-            avg_rate = round((total_orders / total_tryons * 100), 1) if total_tryons > 0 else 0.0
+            avg_rate = min(100.0, round((total_converted_users / total_tryon_users * 100), 1)) if total_tryon_users > 0 else 0.0
             return {
                 "total_tryons": total_tryons,
                 "total_orders": total_orders,
@@ -852,7 +1209,8 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     async def start_tryon(product_id: Annotated[str, Form()], color: Annotated[str, Form()], photo: Annotated[UploadFile, File()], size: Annotated[str, Form()] = "M", request_key: Annotated[str | None, Header(alias="X-Idempotency-Key", min_length=16, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")] = None, user=Depends(current_user)):
         if not service.engine.enabled:
             raise HTTPException(503, "Phòng thử AI chưa được cấu hình.")
-        photo_bytes = normalize_image(await photo.read(MAX_UPLOAD + 1))
+        raw_photo = await photo.read(MAX_UPLOAD + 1)
+        photo_bytes = await run_in_threadpool(normalize_image, raw_photo)
         existing = service.find_request(user["id"], request_key, service.fingerprint(product_id, color, size, photo_bytes))
         if existing:
             with db.connect() as conn:
@@ -863,13 +1221,22 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 raise HTTPException(404, "Không tìm thấy sản phẩm.")
             p = db.product(conn, row)
             profile_row = conn.execute("SELECT profile FROM body_profiles WHERE user_id=?", (user["id"],)).fetchone()
+            u_row = conn.execute("SELECT vip_tier FROM users WHERE id=?", (user["id"],)).fetchone()
         if color not in [c["name"] for c in p["colors"]]:
             raise HTTPException(400, "Màu sản phẩm không hợp lệ.")
         if not any(v["size"] == size and v["color"] == color and v["stock"] > 0 for v in p["variants"]):
             raise HTTPException(400, "Size/màu đã chọn không hợp lệ hoặc đã hết hàng.")
         profile = json.loads(profile_row[0]) if profile_row else {}
-        # Fallback to standard Asian sizing presets if body measurements are missing or incomplete
-        default_size_profiles = {
+        is_feminine = p["tryon_category"] == "one-pieces" or any(w in p["category"].lower() for w in ("váy", "đầm"))
+        female_presets = {
+            "XS": {"height_cm": 152, "weight_kg": 42, "chest_cm": 78, "waist_cm": 60, "hip_cm": 84, "shoulder_cm": 35, "inseam_cm": 67, "fit_preference": "regular"},
+            "S": {"height_cm": 156, "weight_kg": 46, "chest_cm": 82, "waist_cm": 64, "hip_cm": 88, "shoulder_cm": 36, "inseam_cm": 68, "fit_preference": "regular"},
+            "M": {"height_cm": 160, "weight_kg": 51, "chest_cm": 86, "waist_cm": 68, "hip_cm": 92, "shoulder_cm": 38, "inseam_cm": 70, "fit_preference": "regular"},
+            "L": {"height_cm": 165, "weight_kg": 57, "chest_cm": 90, "waist_cm": 72, "hip_cm": 96, "shoulder_cm": 40, "inseam_cm": 72, "fit_preference": "regular"},
+            "XL": {"height_cm": 170, "weight_kg": 64, "chest_cm": 96, "waist_cm": 78, "hip_cm": 102, "shoulder_cm": 42, "inseam_cm": 74, "fit_preference": "regular"},
+            "2XL": {"height_cm": 173, "weight_kg": 70, "chest_cm": 102, "waist_cm": 84, "hip_cm": 108, "shoulder_cm": 44, "inseam_cm": 75, "fit_preference": "regular"},
+        }
+        unisex_presets = {
             "XS": {"height_cm": 160, "weight_kg": 48, "chest_cm": 82, "waist_cm": 66, "hip_cm": 84, "shoulder_cm": 40, "inseam_cm": 72, "fit_preference": "regular"},
             "S": {"height_cm": 165, "weight_kg": 54, "chest_cm": 88, "waist_cm": 72, "hip_cm": 88, "shoulder_cm": 42, "inseam_cm": 74, "fit_preference": "regular"},
             "M": {"height_cm": 170, "weight_kg": 62, "chest_cm": 94, "waist_cm": 78, "hip_cm": 94, "shoulder_cm": 44, "inseam_cm": 76, "fit_preference": "regular"},
@@ -877,41 +1244,19 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             "XL": {"height_cm": 180, "weight_kg": 78, "chest_cm": 106, "waist_cm": 90, "hip_cm": 106, "shoulder_cm": 48, "inseam_cm": 80, "fit_preference": "regular"},
             "2XL": {"height_cm": 185, "weight_kg": 86, "chest_cm": 112, "waist_cm": 96, "hip_cm": 112, "shoulder_cm": 50, "inseam_cm": 82, "fit_preference": "regular"},
         }
-        fallback = default_size_profiles.get(size.upper(), default_size_profiles["M"])
+        preset_map = female_presets if is_feminine else unisex_presets
+        fallback = preset_map.get(size.upper(), preset_map["M"])
         for k, v in fallback.items():
             if profile.get(k) is None:
                 profile[k] = v
 
-        # Check quota & VIP tiers
-        with db.connect() as conn:
-            u_row = conn.execute("SELECT vip_tier, starter_tryons_left, total_spent FROM users WHERE id=?", (user["id"],)).fetchone()
-            tier = u_row["vip_tier"] if u_row and u_row["vip_tier"] else "bronze"
-            starter_left = u_row["starter_tryons_left"] if u_row and u_row["starter_tryons_left"] is not None else 3
-            tier_info = VIP_TIERS.get(tier, VIP_TIERS["bronze"])
-
-            today_prefix = now()[:10]
-            used_today = conn.execute(
-                "SELECT count(*) FROM tryons WHERE user_id=? AND created_at LIKE ? AND deleted=0 AND status != 'failed'",
-                (user["id"], f"{today_prefix}%")
-            ).fetchone()[0]
-
-            use_starter = False
-            if starter_left > 0:
-                use_starter = True
-            elif used_today >= tier_info["daily_limit"]:
-                next_tier_msg = f"Tích lũy mua sắm để lên {VIP_TIERS[tier_info['next_tier']]['name']} nhận thêm lượt hoặc quay lại vào ngày mai nhé!" if tier_info["next_tier"] else "Vui lòng quay lại vào ngày mai nhé!"
-                raise HTTPException(
-                    429,
-                    f"Bạn đã sử dụng hết hạn mức thử đồ hôm nay ({used_today}/{tier_info['daily_limit']} lượt). {next_tier_msg}"
-                )
+        tier = u_row["vip_tier"] if u_row and u_row["vip_tier"] else "bronze"
+        tier_info = VIP_TIERS.get(tier, VIP_TIERS["bronze"])
 
         check = await run_in_threadpool(analyzer.check, user["id"], photo_bytes)
         if not check["accepted"]:
             raise HTTPException(400, "Ảnh chưa đạt: " + " ".join(check["messages"]))
-        job_id = service.start(user["id"], p, color, photo_bytes, size, profile, check, request_key)
-        if use_starter:
-            with db.connect() as conn:
-                conn.execute("UPDATE users SET starter_tryons_left = CASE WHEN starter_tryons_left > 0 THEN starter_tryons_left - 1 ELSE 0 END WHERE id=?", (user["id"],))
+        job_id = service.start(user["id"], p, color, photo_bytes, size, profile, check, request_key, daily_tier_limit=tier_info["daily_limit"])
         with db.connect() as conn:
             return service.serialize(conn.execute("SELECT * FROM tryons WHERE id=?", (job_id,)).fetchone())
 
@@ -931,6 +1276,9 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
 
     @app.delete("/api/tryons/{job_id}", status_code=204)
     def delete_tryon(job_id: str, user=Depends(current_user)):
+        s3_files_to_remove = [f"{job_id}-photo.jpg", f"{job_id}-result.jpg", f"{job_id}-actual.jpg"] + [
+            f"{job_id}-{a}.jpg" for a in ("front", "left", "back", "right")
+        ]
         with db.connect() as conn:
             db.begin_write(conn)
             row = conn.execute("SELECT * FROM tryons WHERE id=? AND user_id=? AND deleted=0", (job_id, user["id"])).fetchone()
@@ -938,23 +1286,23 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 raise HTTPException(404, "Không tìm thấy lượt thử đồ.")
             if row["status"] in ("queued", "processing"):
                 raise HTTPException(409, "Vui lòng chờ lượt thử kết thúc trước khi xóa ảnh.")
-            # Retain a minimal quota tombstone, remove customer image files and secrets.
             for field in ("photo_path", "result_path"):
                 if row[field]:
-                    from pathlib import Path
                     Path(row[field]).unlink(missing_ok=True)
             for view in json.loads(row["views"]).values():
                 for stored_path in (view.get("path"), view.get("candidate_path")):
-                    if not stored_path:
-                        continue
-                    from pathlib import Path
-                    Path(stored_path).unlink(missing_ok=True)
+                    if stored_path:
+                        Path(stored_path).unlink(missing_ok=True)
             evaluation = conn.execute("SELECT actual_path FROM tryon_evaluations WHERE job_id=?", (job_id,)).fetchone()
-            if evaluation:
-                from pathlib import Path
+            if evaluation and evaluation[0]:
                 Path(evaluation[0]).unlink(missing_ok=True)
             conn.execute("DELETE FROM tryon_evaluations WHERE job_id=?", (job_id,))
             conn.execute("UPDATE tryons SET deleted=1,photo_path='',result_path=NULL,image_secret='',usage=NULL,views='{}',body_snapshot=NULL,fit_snapshot=NULL,photo_check=NULL WHERE id=?", (job_id,))
+        for fname in s3_files_to_remove:
+            try:
+                storage.delete_private(fname)
+            except Exception:
+                pass
 
     @app.post("/api/tryons/{job_id}/report", status_code=201)
     def report_tryon(job_id: str, body: ReportRequest, user=Depends(current_user)):

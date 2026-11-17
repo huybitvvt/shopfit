@@ -201,16 +201,18 @@ def test_wrong_outfit_is_not_exposed_as_a_successful_view(client):
     assert not client.app.state.db.settings.data_dir.joinpath("private", f"{job['id']}-left.jpg").exists()
 
 
-def test_generation_requires_profile_and_available_selected_variant(client):
+def test_generation_falls_back_when_profile_missing_and_validates_variant(client):
     customer = login(client)
     def submit(size):
         return client.post("/api/tryons", headers=customer,
                            data={"product_id": "linen-shirt", "color": "Trắng", "size": size},
                            files={"photo": ("photo.jpg", photo_bytes(), "image/jpeg")})
-    assert submit("M").status_code == 400
-    client.patch("/api/body-profile", headers=customer, json=PROFILE)
     assert submit("XXL").status_code == 400
     assert client.get("/api/tryons", headers=customer).json() == []
+    fallback_res = submit("M")
+    assert fallback_res.status_code == 202
+    job = wait_job(client, customer, fallback_res.json()["id"])
+    assert job["body_snapshot"]["chest_cm"] == 94
 
 
 def test_retry_limit_and_deleted_records_still_count_towards_daily_limit(client):

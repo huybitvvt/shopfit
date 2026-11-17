@@ -2,10 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "cd mobile && npx expo export --platform web",
   "outputDirectory": "mobile/dist",
-  "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!assets/|_expo/|favicon.ico|metadata.json).*)",
       "destination": "/index.html"
     }
   ]

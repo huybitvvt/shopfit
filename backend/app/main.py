@@ -785,9 +785,20 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             raise HTTPException(400, "Màu sản phẩm không hợp lệ.")
         if not any(v["size"] == size and v["color"] == color and v["stock"] > 0 for v in p["variants"]):
             raise HTTPException(400, "Size/màu đã chọn không hợp lệ hoặc đã hết hàng.")
-        profile = json.loads(profile_row[0]) if profile_row else None
-        if not profile or any(profile.get(k) is None for k in required_fields(p["tryon_category"])):
-            raise HTTPException(400, "Hãy lưu hồ sơ cơ thể và bổ sung số đo ngực/eo/mông cần thiết trước khi tạo ảnh.")
+        profile = json.loads(profile_row[0]) if profile_row else {}
+        # Fallback to standard Asian sizing presets if body measurements are missing or incomplete
+        default_size_profiles = {
+            "XS": {"height_cm": 160, "weight_kg": 48, "chest_cm": 82, "waist_cm": 66, "hip_cm": 84, "shoulder_cm": 40, "inseam_cm": 72, "fit_preference": "regular"},
+            "S": {"height_cm": 165, "weight_kg": 54, "chest_cm": 88, "waist_cm": 72, "hip_cm": 88, "shoulder_cm": 42, "inseam_cm": 74, "fit_preference": "regular"},
+            "M": {"height_cm": 170, "weight_kg": 62, "chest_cm": 94, "waist_cm": 78, "hip_cm": 94, "shoulder_cm": 44, "inseam_cm": 76, "fit_preference": "regular"},
+            "L": {"height_cm": 175, "weight_kg": 70, "chest_cm": 100, "waist_cm": 84, "hip_cm": 100, "shoulder_cm": 46, "inseam_cm": 78, "fit_preference": "regular"},
+            "XL": {"height_cm": 180, "weight_kg": 78, "chest_cm": 106, "waist_cm": 90, "hip_cm": 106, "shoulder_cm": 48, "inseam_cm": 80, "fit_preference": "regular"},
+            "2XL": {"height_cm": 185, "weight_kg": 86, "chest_cm": 112, "waist_cm": 96, "hip_cm": 112, "shoulder_cm": 50, "inseam_cm": 82, "fit_preference": "regular"},
+        }
+        fallback = default_size_profiles.get(size.upper(), default_size_profiles["M"])
+        for k, v in fallback.items():
+            if profile.get(k) is None:
+                profile[k] = v
 
         # Check quota & VIP tiers
         with db.connect() as conn:

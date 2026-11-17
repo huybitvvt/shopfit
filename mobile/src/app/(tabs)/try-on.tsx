@@ -27,6 +27,7 @@ function FittingRoomContent() {
   const scrollRef = useRef<ScrollView>(null);
   const submitting = useRef(false);
   const [showTopUp, setShowTopUp] = useState(false);
+  const [showSizingAdvice, setShowSizingAdvice] = useState(false);
   const [selectedId, setSelectedId] = useState(params.productId || '');
   const [colorChoice, setColor] = useState(params.color || '');
   const [sizeChoice, setSize] = useState(params.size || 'M');
@@ -106,7 +107,7 @@ function FittingRoomContent() {
   async function generate() {
     if (!user) { router.push('/auth'); return; }
     if (quota && quota.total_available <= 0) { setShowTopUp(true); return; }
-    if (!photo || !product || !check?.accepted || !readyProfile || locked || submitting.current) return;
+    if (!photo || !product || !check?.accepted || locked || submitting.current) return;
     submitting.current = true;
     setBusy(true); setError(null);
     try {
@@ -202,15 +203,112 @@ function FittingRoomContent() {
         {product && <><Text style={s.label}>Màu · {color}</Text><View style={[s.row, { flexWrap: 'wrap', marginBottom: 16 }]}>{product.colors.map(c => <Button key={c.name} variant={c.name === color ? 'primary' : 'outline'} disabled={locked} onPress={() => { setColor(c.name); setJob(null); }}>{c.name}</Button>)}</View>
           <Text style={s.label}>Size đưa vào ảnh AI · {size}</Text><View style={[s.row, { flexWrap: 'wrap' }]}>{product.sizes.map(value => <Pressable key={value} accessibilityRole="button" accessibilityLabel={`Thử size ${value}`} accessibilityState={{ selected: value === size }} disabled={locked} onPress={() => { setSize(value); setJob(null); }} style={{ minWidth: 50, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: size === value ? t.colors.green : t.colors.line, borderRadius: 7, backgroundColor: size === value ? t.colors.greenLight : 'transparent' }}><Text style={s.text}>{value}</Text></Pressable>)}</View>
           {!stock && <Text style={[s.muted, { color: t.colors.error, marginTop: 10 }]}>Màu/size này đã hết hàng.</Text>}
-          <SizingAdvice product={product} color={color} size={size} disabled={locked} onSelect={value => { setSize(value); setJob(null); }} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Tùy chọn tư vấn chọn size & đối chiếu số đo"
+            onPress={() => setShowSizingAdvice(v => !v)}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backgroundColor: '#FAF9F6',
+              borderWidth: 1,
+              borderColor: '#E8E4DC',
+              borderRadius: 10,
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+              marginTop: 14,
+              opacity: pressed ? 0.7 : 1,
+            })}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+              <Ionicons name="body-outline" size={17} color={t.colors.green} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontFamily: t.fonts.medium, fontSize: 13, color: t.colors.ink }}>
+                  Tư vấn chọn size & đối chiếu số đo (Tùy chọn)
+                </Text>
+                <Text style={[s.muted, { fontSize: 10, marginTop: 1 }]}>
+                  {showSizingAdvice ? 'Nhấn để thu gọn đối chiếu' : 'Đối chiếu với số đo cơ thể hoặc đồ đang mặc'}
+                </Text>
+              </View>
+            </View>
+            <Ionicons name={showSizingAdvice ? 'chevron-up' : 'chevron-down'} size={18} color={t.colors.muted} />
+          </Pressable>
+          {showSizingAdvice && (
+            <SizingAdvice product={product} color={color} size={size} disabled={locked} onSelect={value => { setSize(value); setJob(null); }} />
+          )}
         </>}
-        <Text style={s.kicker}>02 / TẠO BỘ ẢNH BỐN GÓC</Text><Text style={[s.muted, { marginVertical: 14 }]}>Tạo 4 ảnh riêng: trước, trái, sau, phải. Dùng mũi tên để chuyển ảnh. Mỗi lượt đầy đủ gọi tạo ảnh 4 lần, kèm kiểm tra ảnh đầu vào và sự nhất quán giữa các góc; thời gian và phí tùy dịch vụ.</Text>
-        <Text style={[s.muted, { marginBottom: 16 }]}>Ảnh người, ảnh sản phẩm, size và số đo của bạn sẽ được gửi đến Gemini để tạo ảnh. Chỉ dùng ảnh bạn có quyền sử dụng.</Text>
-        {!readyProfile && user && <Text style={[s.muted, { marginBottom: 16, color: t.colors.error }]}>Cần hoàn thiện hồ sơ với các vòng đo phù hợp loại trang phục trước khi tạo ảnh.</Text>}
+        <Text style={[s.kicker, { marginTop: 16 }]}>02 / TẠO BỘ ẢNH BỐN GÓC</Text>
+        <Text style={[s.muted, { marginVertical: 12 }]}>Tạo 4 ảnh riêng: trước, trái, sau, phải. Dùng mũi tên để chuyển ảnh. Mỗi lượt đầy đủ gọi tạo ảnh 4 lần, kèm kiểm tra ảnh đầu vào và sự nhất quán giữa các góc.</Text>
+        {!readyProfile && user && (
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            backgroundColor: '#F7F6F2',
+            padding: 10,
+            borderRadius: 8,
+            marginBottom: 14,
+            borderWidth: 1,
+            borderColor: '#EAE6DD',
+          }}>
+            <Ionicons name="information-circle-outline" size={18} color={t.colors.muted} />
+            <Text style={[s.muted, { fontSize: 11, flex: 1, lineHeight: 16 }]}>
+              Chưa lưu số đo? ShopFit sẽ áp dụng vóc dáng chuẩn size {size}. Bạn có thể tùy chỉnh trong{' '}
+              <Text onPress={() => router.push('/body-profile')} style={{ color: t.colors.green, fontFamily: t.fonts.medium }}>
+                Hồ sơ cơ thể
+              </Text>.
+            </Text>
+          </View>
+        )}
         <ErrorMessage message={error || (job?.error ?? null)} />
         {!health?.ai_ready && <Text style={[s.muted, { marginBottom: 14 }]}>Phòng thử AI chưa được shop kích hoạt.</Text>}
-        <Button icon="sparkles-outline" onPress={() => void generate()} disabled={!!user && (!photo || !product || locked || !health?.ai_ready || !check?.accepted || !readyProfile || !stock)} loading={busy}>{!user ? 'Đăng nhập để thử đồ' : running ? 'Đang tạo bộ ảnh bốn góc' : 'Tạo 4 ảnh thử đồ của tôi'}</Button>
-        <Text style={[s.muted, { marginTop: 16, fontSize: 11, lineHeight: 18 }]}>Đây là hình dung bằng AI, không phải phép đo hay mô phỏng vật lý. Chi tiết mặt sau, độ rủ và độ vừa có thể khác khi mặc thật. Chất vải phóng to trong ảnh không chứng minh đúng sớ vải.</Text>
+        <Button
+          icon="sparkles-outline"
+          onPress={() => void generate()}
+          disabled={!!user && (!photo || !product || locked || !health?.ai_ready || !check?.accepted || !stock)}
+          loading={busy}
+        >
+          {!user ? 'Đăng nhập để thử đồ' : running ? 'Đang tạo bộ ảnh bốn góc' : 'Tạo 4 ảnh thử đồ của tôi'}
+        </Button>
+
+        {/* Prominent AI Disclaimer Card for Store Compliance & User Trust */}
+        <View style={{
+          marginTop: 18,
+          backgroundColor: '#F3F6F4',
+          borderWidth: 1,
+          borderColor: '#D4DDD7',
+          borderRadius: 12,
+          padding: 14,
+          gap: 8,
+        }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Ionicons name="sparkles" size={17} color={t.colors.green} />
+            <Text style={{ fontFamily: t.fonts.bold, fontSize: 13, color: t.colors.ink }}>
+              Khuyến cáo về hình ảnh mô phỏng AI
+            </Text>
+          </View>
+          <View style={{ gap: 5 }}>
+            <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start' }}>
+              <Text style={{ color: t.colors.green, fontSize: 14, lineHeight: 18 }}>•</Text>
+              <Text style={{ flex: 1, fontSize: 12, color: '#3A4841', lineHeight: 18 }}>
+                Hình ảnh 4 góc là kết quả mô phỏng do <Text style={{ fontFamily: t.fonts.bold }}>AI tạo sinh</Text> nhằm hỗ trợ hình dung phong cách và phom dáng.
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start' }}>
+              <Text style={{ color: t.colors.green, fontSize: 14, lineHeight: 18 }}>•</Text>
+              <Text style={{ flex: 1, fontSize: 12, color: '#3A4841', lineHeight: 18 }}>
+                Vui lòng đối chiếu với <Text style={{ fontFamily: t.fonts.bold }}>Bảng số đo thành phẩm thực tế</Text> của sản phẩm trước khi quyết định chọn size.
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start' }}>
+              <Text style={{ color: t.colors.green, fontSize: 14, lineHeight: 18 }}>•</Text>
+              <Text style={{ flex: 1, fontSize: 12, color: '#3A4841', lineHeight: 18 }}>
+                Bạn có thể báo cáo khiếu nại nếu ảnh AI tạo ra có sai lệch hoặc nội dung không phù hợp ngay tại màn hình kết quả thử đồ.
+              </Text>
+            </View>
+          </View>
+        </View>
       </View>
     </View>
     <SectionHeading title="Những lần ướm thử" caption="YOUR FITTING DIARY" />

@@ -9,6 +9,7 @@ HTML_SHELL = """<!DOCTYPE html>
   <style>
     :root {{
       --primary: #344E40;
+      --primary-hover: #273A30;
       --bg: #FAF8F5;
       --surface: #FFFFFF;
       --ink: #1C2421;
@@ -21,7 +22,52 @@ HTML_SHELL = """<!DOCTYPE html>
       background: var(--bg);
       color: var(--ink);
       line-height: 1.65;
-      padding: 32px 16px;
+      padding: 0 16px 40px;
+    }}
+    .nav-wrapper {{
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 12px 0;
+      background: linear-gradient(to bottom, var(--bg) 85%, rgba(250, 248, 245, 0));
+    }}
+    .top-nav {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 16px;
+      background: var(--surface);
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+    }}
+    .btn-back {{
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--primary);
+      text-decoration: none;
+      padding: 8px 14px;
+      border-radius: 8px;
+      background: #F0F4F1;
+      border: 1px solid #D4DDD7;
+      cursor: pointer;
+      transition: background 0.2s;
+    }}
+    .btn-back:hover {{
+      background: #E2ECE5;
+      text-decoration: none;
+    }}
+    .nav-brand {{
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      color: var(--primary);
+      text-transform: uppercase;
     }}
     .container {{
       max-width: 800px;
@@ -79,8 +125,31 @@ HTML_SHELL = """<!DOCTYPE html>
       margin: 20px 0;
       font-size: 14px;
     }}
+    .bottom-back-area {{
+      margin: 32px 0 12px;
+      text-align: center;
+    }}
+    .btn-return {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--primary);
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      padding: 12px 24px;
+      border-radius: 10px;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: background 0.2s;
+    }}
+    .btn-return:hover {{
+      background: var(--primary-hover);
+      text-decoration: none;
+    }}
     .footer {{
-      margin-top: 36px;
+      margin-top: 24px;
       padding-top: 20px;
       border-top: 1px solid var(--line);
       font-size: 13px;
@@ -89,13 +158,42 @@ HTML_SHELL = """<!DOCTYPE html>
     }}
     a {{ color: var(--primary); text-decoration: underline; }}
   </style>
+  <script>
+    function returnToApp() {{
+      if (window.history.length > 1) {{
+        window.history.back();
+      }} else {{
+        try {{
+          window.close();
+        }} catch (e) {{}}
+        setTimeout(function() {{
+          window.location.href = '/';
+        }}, 150);
+      }}
+    }}
+  </script>
 </head>
 <body>
+  <div class="nav-wrapper">
+    <div class="top-nav">
+      <button type="button" class="btn-back" onclick="returnToApp()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+        Quay lại ứng dụng
+      </button>
+      <span class="nav-brand">ShopFit Studio</span>
+    </div>
+  </div>
   <div class="container">
     <div class="brand">ShopFit Studio</div>
     <h1>{title}</h1>
     <div class="date">Cập nhật lần cuối: Tháng 11/2026 · Phiên bản 1.0</div>
     {content}
+    <div class="bottom-back-area">
+      <button type="button" class="btn-return" onclick="returnToApp()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+        Quay lại ứng dụng ShopFit
+      </button>
+    </div>
     <div class="footer">
       ShopFit Studio &copy; 2026 · Hỗ trợ: <a href="mailto:support@shopfit.vn">support@shopfit.vn</a>
     </div>

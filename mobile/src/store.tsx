@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
-import { ApiError, request, setApiUrl, setToken } from './api';
+import { API_URL, ApiError, request, setApiUrl, setToken } from './api';
 import { registerForPushNotificationsAsync } from './notifications';
 import type { CartLine, Health, Product, User, UserQuota } from './types';
 
@@ -62,14 +62,33 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     try {
       const [list, status] = await Promise.all([request<Product[]>('/api/products'), request<Health>('/api/health')]);
       setProducts(list); setHealth(status); setError(null);
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) {
+      try {
+        const currentUrl = API_URL;
+        const fallbackUrl = currentUrl.includes('localhost') ? 'https://shopfit-api.onrender.com' : 'http://localhost:8000';
+        setApiUrl(fallbackUrl);
+        const [list, status] = await Promise.all([request<Product[]>('/api/products'), request<Health>('/api/health')]);
+        setProducts(list); setHealth(status); setError(null);
+        void AsyncStorage.setItem('shopfit-server', fallbackUrl);
+      } catch {
+        setError((e as Error).message);
+      }
+    }
     finally { setLoading(false); }
   }, []);
   useEffect(() => {
     void (async () => {
       try {
         const [saved, cartJson, favoriteJson, server] = await Promise.all([sessionStorage.get(), AsyncStorage.getItem('shopfit-cart'), AsyncStorage.getItem('shopfit-favorites'), AsyncStorage.getItem('shopfit-server')]);
-        if (server) setApiUrl(server);
+        const envUrl = process.env.EXPO_PUBLIC_API_URL;
+        if (envUrl) {
+          setApiUrl(envUrl);
+          if (server && server !== envUrl) {
+            void AsyncStorage.setItem('shopfit-server', envUrl);
+          }
+        } else if (server) {
+          setApiUrl(server);
+        }
         void refresh();
         if (cartJson) setCart(JSON.parse(cartJson));
         if (favoriteJson) setFavorites(JSON.parse(favoriteJson));

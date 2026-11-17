@@ -30,6 +30,24 @@ export type Product = {
   material: string; description: string; colors: Color[]; sizes: string[];
   featured: boolean; active: boolean; variants: Variant[]; stock: number;
   size_chart: SizeChart;
+  back_image_url?: string | null;
+  detail_image_url?: string | null;
+};
+export type TryonTopProduct = {
+  product_id: string;
+  name: string;
+  category: string;
+  image_url: string;
+  price: number;
+  tryon_count: number;
+  order_count: number;
+  conversion_rate: number;
+};
+export type TryonAnalytics = {
+  total_tryons: number;
+  total_orders: number;
+  avg_conversion_rate: number;
+  top_products: TryonTopProduct[];
 };
 export type CartLine = { key: string; product: Product; size: string; color: string; quantity: number };
 export type FitReview = { actual_fit: 'tight' | 'fits' | 'loose'; notes: string; updated_at: string };
@@ -38,7 +56,7 @@ export type Order = { id: string; customer_name: string; phone: string; address:
 export type Measurements = { chest_cm?: number | null; waist_cm?: number | null; hip_cm?: number | null; shoulder_cm?: number | null; inseam_cm?: number | null };
 export type BodyProfile = Measurements & { height_cm: number; weight_kg: number; fit_preference: 'slim' | 'regular' | 'relaxed' };
 export type GarmentSize = Measurements & { size: string; length_cm?: number | null };
-export type SizeChart = { rows: GarmentSize[]; verified: boolean; ease: { chest_cm: number; waist_cm: number; hip_cm: number }; back_image_url: string | null };
+export type SizeChart = { rows: GarmentSize[]; verified: boolean; ease: { chest_cm: number; waist_cm: number; hip_cm: number }; back_image_url: string | null; detail_image_url?: string | null };
 export type RegionStatus = 'below_target' | 'target' | 'above_target';
 export type SizeCheck = { key: string; label: string; body_cm: number; garment_cm: number; ease_cm: number; target_cm: number; too_tight: boolean; region: RegionStatus };
 export type WardrobeItem = { id: string; name: string; category: Product['tryon_category']; material: string; measurements: Omit<GarmentSize, 'size'>; created_at: string };

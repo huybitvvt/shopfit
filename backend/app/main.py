@@ -151,7 +151,16 @@ class ProductWrite(BaseModel):
     sizes: list[str] = Field(min_length=1, max_length=10)
     stock_per_variant: int = Field(default=10, ge=0, le=10000)
     variant_stocks: list[VariantStock] | None = None
+    back_image_url: str | None = None
+    detail_image_url: str | None = None
     featured: bool = False
+
+    @field_validator("back_image_url", "detail_image_url")
+    @classmethod
+    def extra_image(cls, value):
+        if value is not None and not re.fullmatch(r"/media/[a-f0-9]{32}\.jpg", value):
+            raise ValueError("Ảnh phụ không hợp lệ")
+        return value
 
     @field_validator("image_url")
     @classmethod
@@ -180,6 +189,8 @@ class ProductPatch(BaseModel):
     price: int | None = Field(default=None, gt=0, le=100_000_000)
     active: bool | None = None
     variants: list[VariantStock] | None = None
+    back_image_url: str | None = None
+    detail_image_url: str | None = None
 
 
 class StatusPatch(BaseModel):
@@ -665,12 +676,26 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             storage.get_catalog(fname)
         if not (settings.data_dir / "catalog" / fname).is_file():
             raise HTTPException(400, "Ảnh sản phẩm không tồn tại.")
+        if body.back_image_url:
+            bfname = body.back_image_url.rsplit("/", 1)[-1]
+            if not (settings.data_dir / "catalog" / bfname).is_file():
+                storage.get_catalog(bfname)
+        if body.detail_image_url:
+            dfname = body.detail_image_url.rsplit("/", 1)[-1]
+            if not (settings.data_dir / "catalog" / dfname).is_file():
+                storage.get_catalog(dfname)
         pid = uuid.uuid4().hex
         stock_map = {f"{vs.size}:{vs.color}": vs.stock for vs in (body.variant_stocks or [])}
+        chart_data = {"rows": [], "verified": False, "ease": {"chest_cm": 8, "waist_cm": 4, "hip_cm": 6}}
+        if body.back_image_url:
+            chart_data["back_image_url"] = body.back_image_url
+        if body.detail_image_url:
+            chart_data["detail_image_url"] = body.detail_image_url
+
         with db.connect() as conn:
-            conn.execute("""INSERT INTO products (id,name,category,tryon_category,price,original_price,image_url,tag,material,description,colors,sizes,featured,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (pid, body.name, body.category, body.tryon_category, body.price, body.original_price,
-                    body.image_url, body.tag, body.material, body.description, json.dumps([c.model_dump() for c in body.colors]), json.dumps(body.sizes), body.featured, now()))
+            conn.execute("""INSERT INTO products (id,name,category,tryon_category,price,original_price,image_url,tag,material,description,colors,sizes,featured,size_chart,created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (pid, body.name, body.category, body.tryon_category, body.price, body.original_price,
+                    body.image_url, body.tag, body.material, body.description, json.dumps([c.model_dump() for c in body.colors]), json.dumps(body.sizes), body.featured, json.dumps(chart_data), now()))
             for size in body.sizes:
                 for color in body.colors:
                     item_stock = stock_map.get(f"{size}:{color.name}", body.stock_per_variant)
@@ -680,12 +705,20 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     @app.patch("/api/admin/products/{product_id}")
     def update_product(product_id: str, body: ProductPatch, user=Depends(admin)):
         with db.connect() as conn:
-            if not conn.execute("SELECT 1 FROM products WHERE id=?", (product_id,)).fetchone():
+            row = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+            if not row:
                 raise HTTPException(404, "Không tìm thấy sản phẩm.")
             for field in ("name", "price", "active"):
                 value = getattr(body, field)
                 if value is not None:
                     conn.execute(f"UPDATE products SET {field}=? WHERE id=?", (value, product_id))
+            if body.back_image_url is not None or body.detail_image_url is not None:
+                chart = json.loads(row["size_chart"] or "{}")
+                if body.back_image_url is not None:
+                    chart["back_image_url"] = body.back_image_url if body.back_image_url != "" else None
+                if body.detail_image_url is not None:
+                    chart["detail_image_url"] = body.detail_image_url if body.detail_image_url != "" else None
+                conn.execute("UPDATE products SET size_chart=? WHERE id=?", (json.dumps(chart), product_id))
             for v in body.variants or []:
                 result = conn.execute("UPDATE variants SET stock=? WHERE product_id=? AND size=? AND color=?", (v.stock, product_id, v.size, v.color))
                 if result.rowcount != 1:
@@ -744,7 +777,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
 
     @app.patch("/api/orders/{order_id}")
     def order_status(order_id: str, body: StatusPatch, user=Depends(current_user)):
-        transitions = {"pending": {"confirmed", "cancelled"}, "confirmed": {"shipping", "cancelled"}, "shipping": {"completed"}, "completed": set(), "cancelled": set()}
+        transitions = {"pending": {"confirmed", "cancelled"}, "confirmed": {"shipping", "cancelled"}, "shipping": {"completed", "cancelled"}, "completed": set(), "cancelled": set()}
         with db.connect() as conn:
             db.begin_write(conn)
             order = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
@@ -774,6 +807,45 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
                 "tryons": completed_tryons,
                 "conversion_rate": conversion_rate,
                 "low_stock_products": low_stock_count,
+            }
+
+    @app.get("/api/admin/tryon-analytics")
+    def tryon_analytics(user=Depends(admin)):
+        with db.connect() as conn:
+            rows = conn.execute("""
+                SELECT 
+                    p.id, p.name, p.category, p.image_url, p.price,
+                    (SELECT count(*) FROM tryons t WHERE t.product_id = p.id AND t.status = 'completed') as tryon_count,
+                    (SELECT COALESCE(sum(oi.quantity), 0) FROM order_items oi 
+                     JOIN orders o ON oi.order_id = o.id 
+                     WHERE oi.product_id = p.id AND o.status != 'cancelled') as order_count
+                FROM products p
+                WHERE p.active = 1
+            """).fetchall()
+            items = []
+            for r in rows:
+                t_cnt = r["tryon_count"]
+                o_cnt = r["order_count"]
+                rate = round((o_cnt / t_cnt * 100), 1) if t_cnt > 0 else 0.0
+                items.append({
+                    "product_id": r["id"],
+                    "name": r["name"],
+                    "category": r["category"],
+                    "image_url": r["image_url"],
+                    "price": r["price"],
+                    "tryon_count": t_cnt,
+                    "order_count": o_cnt,
+                    "conversion_rate": rate,
+                })
+            by_tryon = sorted(items, key=lambda x: (x["tryon_count"], x["order_count"]), reverse=True)
+            total_tryons = sum(x["tryon_count"] for x in items)
+            total_orders = sum(x["order_count"] for x in items)
+            avg_rate = round((total_orders / total_tryons * 100), 1) if total_tryons > 0 else 0.0
+            return {
+                "total_tryons": total_tryons,
+                "total_orders": total_orders,
+                "avg_conversion_rate": avg_rate,
+                "top_products": by_tryon[:5],
             }
 
     @app.post("/api/tryons", status_code=202)

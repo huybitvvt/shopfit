@@ -311,4 +311,6 @@ class Database:
         p["stock"] = sum(v["stock"] for v in p["variants"])
         chart = json.loads(p["size_chart"])
         p["size_chart"] = SizeChart(rows=[]).model_dump() if not chart else chart
+        p["back_image_url"] = p["size_chart"].get("back_image_url")
+        p["detail_image_url"] = p["size_chart"].get("detail_image_url")
         return p

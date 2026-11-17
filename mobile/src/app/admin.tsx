@@ -8,7 +8,7 @@ import { mediaUrl, photoForm, request } from '../api';
 import { Button, Empty, ErrorMessage, Field, Header, IconButton, Screen, s } from '../components/ui';
 import { useStore } from '../store';
 import { money, theme as t } from '../theme';
-import type { PickedPhoto, Product, Variant } from '../types';
+import type { PickedPhoto, Product, TryonAnalytics, Variant } from '../types';
 
 type Summary = {
   products: number;
@@ -55,6 +55,7 @@ export default function Admin() {
   const { user, refresh, notify } = useStore();
   const [products, setProducts] = useState<Product[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [analytics, setAnalytics] = useState<TryonAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -94,6 +95,8 @@ export default function Admin() {
   const [batchStock, setBatchStock] = useState('');
 
   const [photo, setPhoto] = useState<PickedPhoto | null>(null);
+  const [backPhoto, setBackPhoto] = useState<PickedPhoto | null>(null);
+  const [detailPhoto, setDetailPhoto] = useState<PickedPhoto | null>(null);
   const [variants, setVariants] = useState<Variant[]>([]);
   const [busy, setBusy] = useState(false);
   const wide = useWindowDimensions().width >= 750;
@@ -101,12 +104,14 @@ export default function Admin() {
   const load = useCallback(async () => {
     if (user?.role !== 'admin') { setLoading(false); return; }
     try {
-      const [p, stats] = await Promise.all([
+      const [p, stats, ana] = await Promise.all([
         request<Product[]>('/api/admin/products'),
         request<Summary>('/api/admin/summary'),
+        request<TryonAnalytics>('/api/admin/tryon-analytics').catch(() => null),
       ]);
       setProducts(p);
       setSummary(stats);
+      if (ana) setAnalytics(ana);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -159,6 +164,8 @@ export default function Admin() {
     setCategory(product?.category || 'Áo');
     setDescription('');
     setPhoto(null);
+    setBackPhoto(null);
+    setDetailPhoto(null);
     setMaterial('Cotton');
     setColorName('Trắng');
     setColorHex('#FFFFFF');
@@ -171,10 +178,14 @@ export default function Admin() {
     setShowForm(true);
   }
 
-  async function pick() {
+  async function pick(target: 'front' | 'back' | 'detail' = 'front') {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.9 });
-      if (!result.canceled) setPhoto(result.assets[0]);
+      if (!result.canceled && result.assets[0]) {
+        if (target === 'front') setPhoto(result.assets[0]);
+        else if (target === 'back') setBackPhoto(result.assets[0]);
+        else if (target === 'detail') setDetailPhoto(result.assets[0]);
+      }
     } catch {
       setFormError('Không mở được thư viện ảnh.');
     }
@@ -259,6 +270,20 @@ export default function Admin() {
         const form = await photoForm(photo!, 'file');
         const upload = await request<{ url: string }>('/api/admin/upload', { method: 'POST', body: form });
 
+        let backUrl: string | undefined = undefined;
+        if (backPhoto) {
+          const backForm = await photoForm(backPhoto, 'file');
+          const backUpload = await request<{ url: string }>('/api/admin/upload', { method: 'POST', body: backForm });
+          backUrl = backUpload.url;
+        }
+
+        let detailUrl: string | undefined = undefined;
+        if (detailPhoto) {
+          const detailForm = await photoForm(detailPhoto, 'file');
+          const detailUpload = await request<{ url: string }>('/api/admin/upload', { method: 'POST', body: detailForm });
+          detailUrl = detailUpload.url;
+        }
+
         const matchedCat = allCategories.find(c => c.name === category);
         const tryon_cat = matchedCat?.tryon_category || (
           category.toLowerCase().includes('quần') ? 'bottoms' :
@@ -281,6 +306,8 @@ export default function Admin() {
             category,
             tryon_category: tryon_cat,
             image_url: upload.url,
+            back_image_url: backUrl,
+            detail_image_url: detailUrl,
             material,
             description: description.trim(),
             colors: [{ name: colorName.trim(), hex: colorHex }],
@@ -416,6 +443,139 @@ export default function Admin() {
         >
           Chất lượng độ vừa & hạn mức AI
         </Button>
+      </View>
+
+      {/* AI TRY-ON & CONVERSION ANALYTICS CARD */}
+      <View
+        style={[
+          s.card,
+          {
+            backgroundColor: '#FAF8F5',
+            borderColor: '#E6E1D6',
+            padding: 18,
+            marginBottom: 24,
+          },
+        ]}
+      >
+        <View style={[s.between, { marginBottom: 12, flexWrap: 'wrap', gap: 8 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <View style={{ backgroundColor: '#D7E5DC', padding: 8, borderRadius: 8 }}>
+              <Ionicons name="sparkles" size={18} color={t.colors.green} />
+            </View>
+            <View>
+              <Text style={{ fontFamily: t.fonts.bold, fontSize: 15, color: t.colors.ink }}>
+                Top thiết kế được thử & Tỷ lệ chốt đơn (AI Retail Analytics)
+              </Text>
+              <Text style={[s.muted, { fontSize: 11, marginTop: 2 }]}>
+                Đo lường sản phẩm khách thử nhiều nhất và tỷ lệ mua sau khi dùng phòng thử đồ AI
+              </Text>
+            </View>
+          </View>
+          <View style={{ backgroundColor: t.colors.greenLight, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 }}>
+            <Text style={{ fontFamily: t.fonts.bold, fontSize: 11, color: t.colors.green }}>
+              TB toàn shop: {analytics?.avg_conversion_rate ?? summary?.conversion_rate ?? 0}% chốt đơn
+            </Text>
+          </View>
+        </View>
+
+        {(!analytics?.top_products || analytics.top_products.length === 0) ? (
+          <View style={{ paddingVertical: 16, alignItems: 'center' }}>
+            <Text style={[s.muted, { fontSize: 12 }]}>
+              Chưa có dữ liệu thử đồ AI. Dữ liệu xếp hạng sẽ hiển thị tại đây khi khách hàng tạo ảnh thử đồ.
+            </Text>
+          </View>
+        ) : (
+          <View style={{ gap: 10 }}>
+            {analytics.top_products.map((item, idx) => (
+              <View
+                key={item.product_id}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  backgroundColor: 'white',
+                  borderRadius: 10,
+                  padding: 10,
+                  borderWidth: 1,
+                  borderColor: '#EFECE6',
+                  gap: 12,
+                }}
+              >
+                {/* Rank Badge */}
+                <View
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: 13,
+                    backgroundColor: idx === 0 ? '#FEF3C7' : idx === 1 ? '#E0E7FF' : '#F3F4F6',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontFamily: t.fonts.bold,
+                      fontSize: 12,
+                      color: idx === 0 ? '#B45309' : idx === 1 ? '#3730A3' : t.colors.muted,
+                    }}
+                  >
+                    #{idx + 1}
+                  </Text>
+                </View>
+
+                {/* Product Thumbnail */}
+                <Image
+                  source={mediaUrl(item.image_url)}
+                  contentFit="cover"
+                  style={{ width: 44, height: 55, borderRadius: 6, backgroundColor: t.colors.sand }}
+                />
+
+                {/* Info */}
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontFamily: t.fonts.medium, fontSize: 13, color: t.colors.ink }} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text style={[s.muted, { fontSize: 11, marginTop: 2 }]}>
+                    {item.category} · {money(item.price)}
+                  </Text>
+                </View>
+
+                {/* Stat pills */}
+                <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 }}>
+                      <Text style={{ fontSize: 10, fontFamily: t.fonts.medium, color: t.colors.ink }}>
+                        {item.tryon_count} lượt thử
+                      </Text>
+                    </View>
+                    <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 4 }}>
+                      <Text style={{ fontSize: 10, fontFamily: t.fonts.medium, color: t.colors.ink }}>
+                        {item.order_count} đơn mua
+                      </Text>
+                    </View>
+                  </View>
+                  <View
+                    style={{
+                      backgroundColor: item.conversion_rate >= 20 ? '#D1FAE5' : item.conversion_rate > 0 ? '#FEF3C7' : '#F3F4F6',
+                      paddingHorizontal: 8,
+                      paddingVertical: 2,
+                      borderRadius: 4,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 10,
+                        fontFamily: t.fonts.bold,
+                        color: item.conversion_rate >= 20 ? '#047857' : item.conversion_rate > 0 ? '#B45309' : t.colors.muted,
+                      }}
+                    >
+                      {item.conversion_rate}% chốt đơn
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
 
       {/* PRODUCT LIST HEADER & ADD BUTTON */}
@@ -918,24 +1078,81 @@ export default function Admin() {
                   </View>
                 </View>
 
-                {/* 4. CHỌN ẢNH SẢN PHẨM */}
+                {/* 4. CHỌN ẢNH SẢN PHẨM (NHIỀU ẢNH: CHÍNH DIỆN, MẶT SAU, CẬN CHẤT VẢI) */}
+                <Text style={[s.label, { marginTop: 10, fontSize: 13 }]}>1. Ảnh chính diện (Bắt buộc)</Text>
                 {photo && (
                   <Image
                     source={photo.uri}
                     contentFit="contain"
-                    style={{ height: 220, width: '100%', borderRadius: 10, marginBottom: 15, backgroundColor: t.colors.sand }}
+                    style={{ height: 200, width: '100%', borderRadius: 10, marginBottom: 10, backgroundColor: t.colors.sand }}
                   />
                 )}
                 <Button
                   variant="outline"
                   icon="image-outline"
-                  onPress={() => void pick()}
-                  style={{ marginBottom: 14 }}
+                  onPress={() => void pick('front')}
+                  style={{ marginBottom: 10 }}
                 >
-                  {photo ? 'Đổi ảnh sản phẩm' : 'Chọn ảnh sản phẩm từ máy'}
+                  {photo ? 'Đổi ảnh chính diện' : 'Chọn ảnh chính diện từ máy'}
+                </Button>
+                <Text style={[s.muted, { marginBottom: 16, fontSize: 11 }]}>
+                  Ảnh chụp thẳng, nền sáng gọn gàng để AI dựng phom thử đồ chuẩn xác nhất.
+                </Text>
+
+                {/* 2. Ảnh mặt sau */}
+                <View style={[s.between, { marginTop: 4 }]}>
+                  <Text style={[s.label, { fontSize: 13 }]}>2. Ảnh mặt sau (Tùy chọn cho AI xoay 4 góc)</Text>
+                  {backPhoto && (
+                    <Pressable onPress={() => setBackPhoto(null)}>
+                      <Text style={{ fontSize: 11, color: t.colors.error, fontFamily: t.fonts.medium }}>Xóa ảnh</Text>
+                    </Pressable>
+                  )}
+                </View>
+                {backPhoto && (
+                  <Image
+                    source={backPhoto.uri}
+                    contentFit="contain"
+                    style={{ height: 180, width: '100%', borderRadius: 10, marginBottom: 10, backgroundColor: t.colors.sand }}
+                  />
+                )}
+                <Button
+                  variant="outline"
+                  icon="sync-outline"
+                  onPress={() => void pick('back')}
+                  style={{ marginBottom: 10 }}
+                >
+                  {backPhoto ? 'Đổi ảnh mặt sau' : '+ Thêm ảnh chi tiết mặt sau'}
+                </Button>
+                <Text style={[s.muted, { marginBottom: 16, fontSize: 11 }]}>
+                  Giúp AI tạo góc nhìn phía sau chân thực khi khách xoay lưng trong phòng thử ảo.
+                </Text>
+
+                {/* 3. Ảnh cận chất vải */}
+                <View style={[s.between, { marginTop: 4 }]}>
+                  <Text style={[s.label, { fontSize: 13 }]}>3. Ảnh cận chất vải / đường may (Tùy chọn)</Text>
+                  {detailPhoto && (
+                    <Pressable onPress={() => setDetailPhoto(null)}>
+                      <Text style={{ fontSize: 11, color: t.colors.error, fontFamily: t.fonts.medium }}>Xóa ảnh</Text>
+                    </Pressable>
+                  )}
+                </View>
+                {detailPhoto && (
+                  <Image
+                    source={detailPhoto.uri}
+                    contentFit="contain"
+                    style={{ height: 180, width: '100%', borderRadius: 10, marginBottom: 10, backgroundColor: t.colors.sand }}
+                  />
+                )}
+                <Button
+                  variant="outline"
+                  icon="search-outline"
+                  onPress={() => void pick('detail')}
+                  style={{ marginBottom: 10 }}
+                >
+                  {detailPhoto ? 'Đổi ảnh cận chất vải' : '+ Thêm ảnh cận chất vải / đường may'}
                 </Button>
                 <Text style={[s.muted, { marginBottom: 20, fontSize: 11 }]}>
-                  Dùng ảnh trang phục chụp thẳng, nền sáng gọn gàng để AI dựng phom thử đồ đẹp nhất.
+                  Khách hàng có thể bấm xem chi tiết bề mặt vải và đường kim mũi chỉ.
                 </Text>
               </>
             )}

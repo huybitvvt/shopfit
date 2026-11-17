@@ -41,6 +41,7 @@ class SizeChart(BaseModel):
     verified: bool = False
     ease: Ease = Field(default_factory=Ease)
     back_image_url: str | None = Field(default=None, pattern=r"^/media/[a-f0-9]{32}\.jpg$")
+    detail_image_url: str | None = Field(default=None, pattern=r"^/media/[a-f0-9]{32}\.jpg$")
 
     @model_validator(mode="after")
     def unique(self):

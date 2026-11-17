@@ -20,6 +20,7 @@ type Store = {
   refresh: () => Promise<void>; login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>; logout: () => Promise<void>;
   forgotPassword: (email: string) => Promise<{ message: string; debug_otp?: string }>;
+  verifyOtp: (email: string, otp: string) => Promise<{ status: string; message: string }>;
   resetPassword: (email: string, otp: string, newPassword: string) => Promise<{ message: string }>;
   deleteAccount: () => Promise<void>;
   toggleFavorite: (id: string) => void; addCart: (p: Product, size: string, color: string) => void;
@@ -129,6 +130,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       method: 'POST', body: JSON.stringify({ email }),
     });
   }
+  async function verifyOtp(email: string, otp: string) {
+    return request<{ status: string; message: string }>('/api/auth/verify-otp', {
+      method: 'POST', body: JSON.stringify({ email, otp }),
+    });
+  }
   async function resetPassword(email: string, otp: string, newPassword: string) {
     return request<{ message: string }>('/api/auth/reset-password', {
       method: 'POST', body: JSON.stringify({ email, otp, new_password: newPassword }),
@@ -161,6 +167,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   return <Context.Provider value={{ products, loading, error, health, user, restoring, cart, favorites, quota, refreshQuota, toast, notify, refresh,
     login: (email, password) => authenticate('/api/auth/login', { email, password }),
     register: (name, email, password) => authenticate('/api/auth/register', { name, email, password }),
-    logout, deleteAccount, forgotPassword, resetPassword, changeServer, toggleFavorite, addCart, updateCart, clearCart: () => setCart([]) }}>{children}</Context.Provider>;
+    logout, deleteAccount, forgotPassword, verifyOtp, resetPassword, changeServer, toggleFavorite, addCart, updateCart, clearCart: () => setCart([]) }}>{children}</Context.Provider>;
 }
 export function useStore() { const store = useContext(Context); if (!store) throw new Error('StoreProvider is missing'); return store; }

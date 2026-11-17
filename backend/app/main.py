@@ -33,8 +33,22 @@ from .notifier import send_push_notification
 
 
 class Login(BaseModel):
+    email: str = Field(min_length=2, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value):
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value) and not re.fullmatch(r"[a-z0-9_.-]{2,50}", value):
+            raise ValueError("Email hoặc tên tài khoản không hợp lệ")
+        return value
+
+
+class Register(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
     email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=8, max_length=128)
+    password: str = Field(min_length=6, max_length=128)
 
     @field_validator("email")
     @classmethod
@@ -43,10 +57,6 @@ class Login(BaseModel):
         if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
             raise ValueError("Email không hợp lệ")
         return value
-
-
-class Register(Login):
-    name: str = Field(min_length=2, max_length=80)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -61,10 +71,23 @@ class ForgotPasswordRequest(BaseModel):
         return value
 
 
+class VerifyOtpRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    otp: str = Field(min_length=4, max_length=10)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value):
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+            raise ValueError("Email không hợp lệ")
+        return value
+
+
 class ResetPasswordRequest(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     otp: str = Field(min_length=4, max_length=10)
-    new_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
 
     @field_validator("email")
     @classmethod
@@ -376,9 +399,9 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     @app.post("/api/auth/login")
     def login(body: Login):
         with db.connect() as conn:
-            user = conn.execute("SELECT * FROM users WHERE email=?", (body.email,)).fetchone()
+            user = conn.execute("SELECT * FROM users WHERE email=? OR email=? OR name=?", (body.email, f"{body.email}@shopfit.vn", body.email)).fetchone()
             if not user or not verify_password(body.password, user["password_hash"]):
-                raise HTTPException(401, "Email hoặc mật khẩu chưa đúng.")
+                raise HTTPException(401, "Tài khoản hoặc mật khẩu chưa đúng.")
             return issue_session(conn, user)
 
     @app.get("/api/auth/me")
@@ -567,6 +590,24 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             raise HTTPException(500, "Không thể gửi email lúc này. Vui lòng kiểm tra lại cấu hình email hoặc thử lại sau.")
 
         return {"message": "Mã xác thực OTP đã được gửi đến email của bạn. Vui lòng kiểm tra hộp thư đến (hoặc hòm thư rác/spam)."}
+
+    @app.post("/api/auth/verify-otp")
+    def verify_otp(body: VerifyOtpRequest):
+        with db.connect() as conn:
+            db.begin_write(conn)
+            reset_row = conn.execute("SELECT * FROM password_resets WHERE email=?", (body.email,)).fetchone()
+            if not reset_row:
+                raise HTTPException(400, "Không tìm thấy yêu cầu hoặc mã OTP đã hết hạn.")
+            if int(time.time()) > reset_row["expires_at"]:
+                conn.execute("DELETE FROM password_resets WHERE email=?", (body.email,))
+                raise HTTPException(400, "Mã OTP đã hết hạn. Vui lòng yêu cầu mã mới.")
+            if reset_row["attempts"] >= 5:
+                conn.execute("DELETE FROM password_resets WHERE email=?", (body.email,))
+                raise HTTPException(429, "Bạn đã nhập sai mã quá 5 lần. Vui lòng yêu cầu mã mới.")
+            if not hmac.compare_digest(reset_row["otp_hash"], token_hash(body.otp.strip())):
+                conn.execute("UPDATE password_resets SET attempts = attempts + 1 WHERE email=?", (body.email,))
+                raise HTTPException(400, "Mã OTP không chính xác. Vui lòng kiểm tra lại.")
+            return {"status": "ok", "message": "Mã xác thực OTP chính xác."}
 
     @app.post("/api/auth/reset-password")
     def reset_password(body: ResetPasswordRequest):

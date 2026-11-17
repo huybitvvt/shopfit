@@ -1,75 +1,142 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Linking, Platform, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Linking, Platform, Pressable, Text, View } from 'react-native';
 import { API_URL } from '../api';
 import { Button, ErrorMessage, Field, Header, Screen, s } from '../components/ui';
 import { useStore } from '../store';
 import { theme as t } from '../theme';
 
-type AuthMode = 'login' | 'signup' | 'forgot' | 'reset';
+type AuthMode = 'login' | 'signup' | 'forgot' | 'otp' | 'reset';
 
 export default function Auth() {
-  const { login, register, forgotPassword, resetPassword, health, notify } = useStore();
+  const { login, register, forgotPassword, verifyOtp, resetPassword, notify } = useStore();
   const [mode, setMode] = useState<AuthMode>('login');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [visible, setVisible] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
 
-  async function submit(demo?: 'customer' | 'admin') {
+  async function handleVerifyOtpCode(codeToVerify?: string) {
+    const code = (codeToVerify ?? otp).trim();
+    if (code.length < 6) {
+      setError('Vui lòng nhập đủ 6 chữ số mã OTP.');
+      return;
+    }
+    setError(null);
+    setVerifyingOtp(true);
+    try {
+      await verifyOtp(email.trim(), code);
+      notify('Mã OTP chính xác! Vui lòng đặt mật khẩu mới.');
+      setMode('reset');
+    } catch (e) {
+      setError((e as Error).message || 'Mã OTP không chính xác. Vui lòng kiểm tra lại.');
+    } finally {
+      setVerifyingOtp(false);
+    }
+  }
+
+  async function handleResendOtp() {
+    if (!email.trim()) return;
     setError(null);
     setBusy(true);
     try {
-      if (demo) {
-        await login(demo === 'admin' ? 'shop@shopfit.local' : 'khach@shopfit.local', demo === 'admin' ? 'ShopfitAdmin123!' : 'Shopfit123!');
-        notify('Đã đăng nhập tài khoản trải nghiệm.');
-        if (router.canGoBack()) router.back(); else router.replace('/profile');
-        return;
-      }
-
-      if (mode === 'login') {
-        if (!email.trim() || password.length < 8) {
-          setError('Vui lòng nhập email hợp lệ và mật khẩu ít nhất 8 ký tự.');
-          return;
-        }
-        await login(email.trim(), password);
-        notify('Đã đăng nhập. Chào mừng bạn trở lại.');
-        if (router.canGoBack()) router.back(); else router.replace('/profile');
-      } else if (mode === 'signup') {
-        if (!email.trim() || password.length < 8 || name.trim().length < 2) {
-          setError('Vui lòng nhập họ tên, email hợp lệ và mật khẩu ít nhất 8 ký tự.');
-          return;
-        }
-        await register(name.trim(), email.trim(), password);
-        notify('Chào mừng bạn đến với ShopFit.');
-        if (router.canGoBack()) router.back(); else router.replace('/profile');
-      } else if (mode === 'forgot') {
-        if (!email.trim()) {
-          setError('Vui lòng nhập email để nhận mã xác nhận OTP.');
-          return;
-        }
-        const res = await forgotPassword(email.trim());
-        notify(res.message || 'Mã xác thực OTP đã được gửi đến email của bạn.');
-        setMode('reset');
-      } else if (mode === 'reset') {
-        if (!otp.trim() || newPassword.length < 8) {
-          setError('Vui lòng nhập mã OTP và mật khẩu mới ít nhất 8 ký tự.');
-          return;
-        }
-        const res = await resetPassword(email.trim(), otp.trim(), newPassword);
-        notify(res.message || 'Đặt lại mật khẩu thành công!');
-        setPassword('');
-        setMode('login');
-      }
+      const res = await forgotPassword(email.trim());
+      notify(res.message || 'Mã OTP mới đã được gửi đến email của bạn.');
+      setOtp('');
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function submit() {
+    setError(null);
+
+    if ((mode === 'login' || mode === 'signup') && !acceptedTerms) {
+      setError('Vui lòng tích chọn đồng ý với Điều khoản dịch vụ và Chính sách quyền riêng tư để tiếp tục.');
+      return;
+    }
+
+    if (mode === 'login') {
+      if (!email.trim() || !password) {
+        setError('Vui lòng nhập tài khoản/email và mật khẩu.');
+        return;
+      }
+      setBusy(true);
+      try {
+        await login(email.trim(), password);
+        notify('Đã đăng nhập. Chào mừng bạn trở lại.');
+        if (router.canGoBack()) router.back(); else router.replace('/profile');
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    } else if (mode === 'signup') {
+      if (!email.trim() || password.length < 6 || name.trim().length < 2) {
+        setError('Vui lòng nhập họ tên, email hợp lệ và mật khẩu ít nhất 6 ký tự.');
+        return;
+      }
+      setBusy(true);
+      try {
+        await register(name.trim(), email.trim(), password);
+        notify('Chào mừng bạn đến với ShopFit.');
+        if (router.canGoBack()) router.back(); else router.replace('/profile');
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    } else if (mode === 'forgot') {
+      if (!email.trim()) {
+        setError('Vui lòng nhập email để nhận mã xác nhận OTP.');
+        return;
+      }
+      setBusy(true);
+      try {
+        const res = await forgotPassword(email.trim());
+        notify(res.message || 'Mã xác thực OTP đã được gửi đến email của bạn.');
+        setOtp('');
+        setMode('otp');
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    } else if (mode === 'otp') {
+      await handleVerifyOtpCode();
+    } else if (mode === 'reset') {
+      if (newPassword.length < 6) {
+        setError('Mật khẩu mới phải có ít nhất 6 ký tự.');
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        setError('Mật khẩu xác nhận không trùng khớp.');
+        return;
+      }
+      setBusy(true);
+      try {
+        const res = await resetPassword(email.trim(), otp.trim(), newPassword);
+        notify(res.message || 'Đặt lại mật khẩu thành công!');
+        setPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        setOtp('');
+        setMode('login');
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setBusy(false);
+      }
     }
   }
 
@@ -89,10 +156,15 @@ export default function Auth() {
       title: 'Lấy lại\nmật khẩu.',
       subtitle: 'Nhập email của bạn để nhận mã OTP xác thực đặt lại mật khẩu.',
     },
+    otp: {
+      kicker: 'VERIFICATION CODE',
+      title: 'Xác thực\nmã OTP.',
+      subtitle: `Nhập mã 6 chữ số vừa gửi đến ${email}.`,
+    },
     reset: {
       kicker: 'SET NEW PASSWORD',
       title: 'Tạo mật khẩu\nmới.',
-      subtitle: `Nhập mã OTP vừa gửi đến ${email} và mật khẩu mới.`,
+      subtitle: `Mã OTP hợp lệ. Vui lòng tạo mật khẩu mới cho ${email}.`,
     },
   };
 
@@ -110,7 +182,17 @@ export default function Auth() {
           <Field label="Họ và tên" value={name} onChangeText={setName} autoComplete="name" placeholder="Tên bạn muốn được gọi" />
         )}
 
-        {(mode === 'login' || mode === 'signup' || mode === 'forgot') && (
+        {mode === 'login' && (
+          <Field
+            label="Email hoặc tên tài khoản"
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+            placeholder="ban@email.com hoặc chushop"
+          />
+        )}
+
+        {(mode === 'signup' || mode === 'forgot') && (
           <Field
             label="Email"
             value={email}
@@ -130,7 +212,7 @@ export default function Auth() {
               onChangeText={setPassword}
               secureTextEntry={!visible}
               autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-              placeholder="Ít nhất 8 ký tự"
+              placeholder="Nhập mật khẩu"
               style={{ paddingRight: 52 }}
             />
             <Pressable
@@ -148,48 +230,34 @@ export default function Auth() {
           <Pressable
             accessibilityRole="button"
             onPress={() => { setMode('forgot'); setError(null); }}
-            style={{ alignSelf: 'flex-end', marginBottom: 18, marginTop: -6 }}
+            style={{ alignSelf: 'flex-end', marginBottom: 10, marginTop: -6 }}
           >
             <Text style={{ fontFamily: t.fonts.medium, color: t.colors.green, fontSize: 13 }}>Quên mật khẩu?</Text>
           </Pressable>
         )}
 
-        {mode === 'reset' && (
-          <>
-            <Field
-              label="Mã xác thực OTP (6 chữ số)"
-              value={otp}
-              onChangeText={setOtp}
-              keyboardType="number-pad"
-              maxLength={6}
-              placeholder="Ví dụ: 123456"
-            />
-            <View>
-              <Field
-                label="Mật khẩu mới"
-                value={newPassword}
-                onChangeText={setNewPassword}
-                secureTextEntry={!visible}
-                autoComplete="new-password"
-                placeholder="Mật khẩu mới ít nhất 8 ký tự"
-                style={{ paddingRight: 52 }}
-              />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={visible ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
-                onPress={() => setVisible(v => !v)}
-                style={{ position: 'absolute', right: 4, top: 28, width: 48, height: 48, justifyContent: 'center', alignItems: 'center' }}
-              >
-                <Ionicons name={visible ? 'eye-off-outline' : 'eye-outline'} size={21} color={t.colors.muted} />
-              </Pressable>
+        {/* Checkbox for Terms & Privacy Policy (Login & Signup) */}
+        {(mode === 'login' || mode === 'signup') && (
+          <Pressable
+            accessibilityRole="checkbox"
+            accessibilityState={{ checked: acceptedTerms }}
+            onPress={() => setAcceptedTerms(v => !v)}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 14 }}
+          >
+            <View style={{
+              width: 22,
+              height: 22,
+              borderRadius: 6,
+              borderWidth: 1.5,
+              borderColor: acceptedTerms ? t.colors.green : t.colors.muted,
+              backgroundColor: acceptedTerms ? t.colors.green : 'transparent',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
+              {acceptedTerms && <Ionicons name="checkmark" size={16} color="#FFFFFF" />}
             </View>
-          </>
-        )}
-
-        {mode === 'signup' && (
-          <View style={{ marginBottom: 18, marginTop: 4 }}>
-            <Text style={[s.muted, { fontSize: 12, lineHeight: 18 }]}>
-              Bằng cách tạo tài khoản, bạn đồng ý với{' '}
+            <Text style={[s.muted, { flex: 1, fontSize: 13, lineHeight: 19 }]}>
+              Tôi đồng ý với{' '}
               <Text
                 onPress={() => void Linking.openURL(`${API_URL}/terms`)}
                 style={{ color: t.colors.green, fontFamily: t.fonts.medium, textDecorationLine: 'underline' }}
@@ -205,16 +273,91 @@ export default function Auth() {
               </Text>{' '}
               của ShopFit.
             </Text>
+          </Pressable>
+        )}
+
+        {/* STEP 2: ENTER OTP & AUTO-VERIFY */}
+        {mode === 'otp' && (
+          <View style={{ gap: 10 }}>
+            <Field
+              label="Mã xác thực OTP (6 chữ số)"
+              value={otp}
+              onChangeText={(text) => {
+                const clean = text.replace(/[^0-9]/g, '');
+                setOtp(clean);
+                if (clean.length === 6) {
+                  void handleVerifyOtpCode(clean);
+                }
+              }}
+              keyboardType="number-pad"
+              maxLength={6}
+              placeholder="Nhập mã 6 chữ số (ví dụ: 390610)"
+            />
+            {verifyingOtp && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <ActivityIndicator size="small" color={t.colors.green} />
+                <Text style={{ fontSize: 12, color: t.colors.green, fontFamily: t.fonts.medium }}>
+                  Đang kiểm tra mã OTP...
+                </Text>
+              </View>
+            )}
+            <Pressable
+              accessibilityRole="button"
+              disabled={busy}
+              onPress={() => void handleResendOtp()}
+              style={{ alignSelf: 'flex-start', marginBottom: 12 }}
+            >
+              <Text style={{ fontSize: 13, color: t.colors.green, fontFamily: t.fonts.medium }}>
+                Chưa nhận được mã? Gửi lại OTP
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* STEP 3: ENTER NEW PASSWORD */}
+        {mode === 'reset' && (
+          <View style={{ gap: 4 }}>
+            <View>
+              <Field
+                label="Mật khẩu mới"
+                value={newPassword}
+                onChangeText={setNewPassword}
+                secureTextEntry={!visible}
+                autoComplete="new-password"
+                placeholder="Ít nhất 6 ký tự"
+                style={{ paddingRight: 52 }}
+              />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={visible ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                onPress={() => setVisible(v => !v)}
+                style={{ position: 'absolute', right: 4, top: 28, width: 48, height: 48, justifyContent: 'center', alignItems: 'center' }}
+              >
+                <Ionicons name={visible ? 'eye-off-outline' : 'eye-outline'} size={21} color={t.colors.muted} />
+              </Pressable>
+            </View>
+
+            <View>
+              <Field
+                label="Xác nhận mật khẩu mới"
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry={!visible}
+                placeholder="Nhập lại mật khẩu mới"
+                style={{ paddingRight: 52 }}
+              />
+            </View>
           </View>
         )}
 
         <ErrorMessage message={error} />
 
-        <Button loading={busy} onPress={() => void submit()} icon="arrow-forward">
+        <Button loading={busy || verifyingOtp} onPress={() => void submit()} icon="arrow-forward">
           {mode === 'login' && 'Đăng nhập'}
           {mode === 'signup' && 'Tạo tài khoản'}
           {mode === 'forgot' && 'Gửi mã xác thực'}
-          {mode === 'reset' && 'Xác nhận mật khẩu mới'}
+          {mode === 'otp' && 'Xác nhận mã OTP'}
+          {mode === 'reset' && 'Lưu mật khẩu mới'}
         </Button>
 
         {mode === 'login' && (
@@ -245,7 +388,7 @@ export default function Auth() {
           </Pressable>
         )}
 
-        {(mode === 'forgot' || mode === 'reset') && (
+        {(mode === 'forgot' || mode === 'otp' || mode === 'reset') && (
           <Pressable
             accessibilityRole="button"
             disabled={busy}
@@ -254,20 +397,6 @@ export default function Auth() {
           >
             <Text style={{ fontFamily: t.fonts.medium, color: t.colors.green }}>Quay lại đăng nhập</Text>
           </Pressable>
-        )}
-
-        {health?.demo_accounts && (mode === 'login' || mode === 'signup') && (
-          <View style={{ marginTop: 20, paddingTop: 20, borderTopWidth: 1, borderTopColor: t.colors.line }}>
-            <Text style={[s.kicker, { textAlign: 'center', marginBottom: 12 }]}>TÀI KHOẢN TRẢI NGHIỆM</Text>
-            <View style={s.row}>
-              <Button variant="secondary" disabled={busy} onPress={() => void submit('customer')} style={{ flex: 1 }}>
-                Khách hàng
-              </Button>
-              <Button variant="outline" disabled={busy} onPress={() => void submit('admin')} style={{ flex: 1 }}>
-                Chủ shop
-              </Button>
-            </View>
-          </View>
         )}
       </KeyboardAvoidingView>
     </Screen>

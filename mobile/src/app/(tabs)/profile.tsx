@@ -22,7 +22,6 @@ export default function Profile() {
     { icon: 'bag-outline', title: 'Giỏ hàng', subtitle: `${cart.reduce((sum, item) => sum + item.quantity, 0)} sản phẩm đang chờ bạn`, onPress: () => router.push('/cart') },
     { icon: 'shield-checkmark-outline', title: 'Chính sách quyền riêng tư', subtitle: 'Bảo vệ dữ liệu cá nhân, số đo và ảnh thử AI của bạn', onPress: () => void Linking.openURL(`${API_URL}/privacy`) },
     { icon: 'document-text-outline', title: 'Điều khoản dịch vụ', subtitle: 'Quy định mua sắm và khuyến cáo hình ảnh mô phỏng AI', onPress: () => void Linking.openURL(`${API_URL}/terms`) },
-    { icon: 'server-outline', title: 'Kết nối shop', subtitle: 'Cấu hình backend cho Android và mạng Wi-Fi của bạn', onPress: () => router.push('/connection') },
   ];
 
   async function performDeletion() {

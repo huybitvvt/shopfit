@@ -268,6 +268,18 @@ class Database:
                     conn.execute("INSERT INTO variants VALUES (?,?,?,?) ON CONFLICT DO NOTHING", (p["id"], size, color["name"], 12))
             if seed_charts:
                 conn.execute("UPDATE products SET size_chart=? WHERE id=?", (json.dumps(demo_chart(p)), p["id"]))
+        # Create/ensure shop owner account: tk: chushop, mk: 123
+        admin_uid = "admin-chushop"
+        admin_pwd_hash = hash_password("123")
+        existing_admin = conn.execute("SELECT id FROM users WHERE email='chushop' OR id='admin-chushop'").fetchone()
+        if existing_admin:
+            conn.execute("UPDATE users SET email='chushop', password_hash=?, role='admin' WHERE id=?", (admin_pwd_hash, existing_admin[0]))
+        else:
+            conn.execute(
+                "INSERT INTO users (id, name, email, password_hash, role, vip_tier, starter_tryons_left, total_spent, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (admin_uid, "Chủ Shop", "chushop", admin_pwd_hash, "admin", "diamond", 999, 10000000, now())
+            )
+
         if self.settings.seed_demo:
             for uid, name, email, password, role in [
                 ("demo-customer", "Minh Anh", "khach@shopfit.local", self.settings.customer_password, "customer"),

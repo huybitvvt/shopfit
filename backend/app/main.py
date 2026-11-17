@@ -131,10 +131,16 @@ class Color(BaseModel):
     hex: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
 
 
+class VariantStock(BaseModel):
+    size: str
+    color: str
+    stock: int = Field(ge=0, le=10000)
+
+
 class ProductWrite(BaseModel):
     name: str = Field(min_length=2, max_length=100)
-    category: Literal["Áo", "Quần", "Váy", "Áo khoác"]
-    tryon_category: Literal["tops", "bottoms", "one-pieces"]
+    category: str = Field(min_length=1, max_length=50)
+    tryon_category: Literal["tops", "bottoms", "one-pieces"] = "tops"
     price: int = Field(gt=0, le=100_000_000)
     original_price: int | None = Field(default=None, gt=0, le=100_000_000)
     image_url: str = Field(max_length=500)
@@ -144,6 +150,7 @@ class ProductWrite(BaseModel):
     colors: list[Color] = Field(min_length=1, max_length=10)
     sizes: list[str] = Field(min_length=1, max_length=10)
     stock_per_variant: int = Field(default=10, ge=0, le=10000)
+    variant_stocks: list[VariantStock] | None = None
     featured: bool = False
 
     @field_validator("image_url")
@@ -166,12 +173,6 @@ class ProductWrite(BaseModel):
         if len({c.name for c in colors}) != len(colors):
             raise ValueError("Màu không được trùng")
         return colors
-
-
-class VariantStock(BaseModel):
-    size: str
-    color: str
-    stock: int = Field(ge=0, le=10000)
 
 
 class ProductPatch(BaseModel):
@@ -664,15 +665,16 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             storage.get_catalog(fname)
         if not (settings.data_dir / "catalog" / fname).is_file():
             raise HTTPException(400, "Ảnh sản phẩm không tồn tại.")
-            raise HTTPException(400, "Ảnh sản phẩm không tồn tại.")
         pid = uuid.uuid4().hex
+        stock_map = {f"{vs.size}:{vs.color}": vs.stock for vs in (body.variant_stocks or [])}
         with db.connect() as conn:
             conn.execute("""INSERT INTO products (id,name,category,tryon_category,price,original_price,image_url,tag,material,description,colors,sizes,featured,created_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (pid, body.name, body.category, body.tryon_category, body.price, body.original_price,
                     body.image_url, body.tag, body.material, body.description, json.dumps([c.model_dump() for c in body.colors]), json.dumps(body.sizes), body.featured, now()))
             for size in body.sizes:
                 for color in body.colors:
-                    conn.execute("INSERT INTO variants VALUES (?,?,?,?)", (pid, size, color.name, body.stock_per_variant))
+                    item_stock = stock_map.get(f"{size}:{color.name}", body.stock_per_variant)
+                    conn.execute("INSERT INTO variants VALUES (?,?,?,?)", (pid, size, color.name, item_stock))
             return db.product(conn, conn.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone())
 
     @app.patch("/api/admin/products/{product_id}")
@@ -761,10 +763,18 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     @app.get("/api/admin/summary")
     def summary(user=Depends(admin)):
         with db.connect() as conn:
-            return {"products": conn.execute("SELECT count(*) FROM products WHERE active=1").fetchone()[0],
+            total_orders = conn.execute("SELECT count(*) FROM orders").fetchone()[0]
+            completed_tryons = conn.execute("SELECT count(*) FROM tryons WHERE status='completed'").fetchone()[0]
+            conversion_rate = round((total_orders / completed_tryons * 100), 1) if completed_tryons > 0 else 0.0
+            low_stock_count = conn.execute("SELECT count(DISTINCT product_id) FROM variants WHERE stock <= 3").fetchone()[0]
+            return {
+                "products": conn.execute("SELECT count(*) FROM products WHERE active=1").fetchone()[0],
                 "pending_orders": conn.execute("SELECT count(*) FROM orders WHERE status='pending'").fetchone()[0],
                 "revenue": conn.execute("SELECT coalesce(sum(total),0) FROM orders WHERE status='completed'").fetchone()[0],
-                "tryons": conn.execute("SELECT count(*) FROM tryons WHERE status='completed'").fetchone()[0]}
+                "tryons": completed_tryons,
+                "conversion_rate": conversion_rate,
+                "low_stock_products": low_stock_count,
+            }
 
     @app.post("/api/tryons", status_code=202)
     async def start_tryon(product_id: Annotated[str, Form()], color: Annotated[str, Form()], photo: Annotated[UploadFile, File()], size: Annotated[str, Form()] = "M", request_key: Annotated[str | None, Header(alias="X-Idempotency-Key", min_length=16, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")] = None, user=Depends(current_user)):

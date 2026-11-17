@@ -1,10 +1,25 @@
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { StoreProvider, useStore } from '../store';
 import { theme as t } from '../theme';
+
+if (Platform.OS === 'web' && typeof document !== 'undefined') {
+  const styleId = 'shopfit-web-resets';
+  if (!document.getElementById(styleId)) {
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      input::-ms-reveal,
+      input::-ms-clear {
+        display: none !important;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+}
 
 export { ErrorBoundary } from 'expo-router';
 function Feedback() {

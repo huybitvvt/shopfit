@@ -111,6 +111,7 @@ async function main() {
           category: 'tops',
           material: 'Cotton Poplin ít giãn',
           measurements: {
+            size: 'REF',
             chest_cm: 95,
             waist_cm: 88,
             shoulder_cm: 39,
@@ -164,11 +165,12 @@ async function main() {
         );
 
         if (!completedOrder) {
+          const idemKey = `demo-seed-${reviewer.email}-${targetProduct.id}`.replace(/[^a-zA-Z0-9_-]/g, '-');
           const created = await api(
             '/api/orders',
             {
               method: 'POST',
-              headers: { 'X-Idempotency-Key': `demo-seed-${reviewer.email}-${targetProduct.id}` },
+              headers: { 'X-Idempotency-Key': idemKey },
               body: JSON.stringify({
                 customer_name: reviewer.name,
                 phone: '0912345678',

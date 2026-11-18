@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { mediaUrl, request } from '../api';
 import { Button, Empty, ErrorMessage, Field, Header, IconButton, Screen, s } from '../components/ui';
+import { tapSuccess } from '../haptics';
 import { finishRequestKey, pendingRequestKey } from '../request-key';
 import { useStore } from '../store';
 import { money, theme as t } from '../theme';
@@ -119,6 +120,7 @@ export default function Cart() {
       const key = await pendingRequestKey(scope, body);
       await request<Order>('/api/orders', { method: 'POST', body, headers: { 'X-Idempotency-Key': key } });
       await finishRequestKey(scope);
+      tapSuccess();
       clearCart();
       void refresh();
       notify('Đặt hàng thành công. Shop sẽ sớm xác nhận đơn của bạn.');

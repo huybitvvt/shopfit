@@ -89,6 +89,7 @@ export function Screen({
   onRefresh?: () => Promise<void> | void;
 }) {
   const insets = useSafeAreaInsets();
+  const { offline, refresh: refreshStore, loading: storeLoading } = useStore();
   const [refreshing, setRefreshing] = useState(false);
 
   async function handleRefresh() {
@@ -102,6 +103,48 @@ export function Screen({
   }
 
   const contentPaddingBottom = 40 + Math.max(0, insets.bottom);
+  const offlineBanner = offline ? (
+    <View
+      accessibilityLiveRegion="polite"
+      style={{
+        backgroundColor: '#FDF6E7',
+        borderWidth: 1,
+        borderColor: '#EBD5A7',
+        borderRadius: 10,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        marginTop: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 10,
+      }}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+        <Ionicons name="cloud-offline-outline" size={18} color="#9A6700" />
+        <Text style={{ fontFamily: t.fonts.medium, fontSize: 12, color: '#7C5200', flex: 1, lineHeight: 17 }}>
+          Đang xem bản lưu ngoại tuyến · Một số tính năng cần mạng
+        </Text>
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Kết nối lại máy chủ"
+        disabled={storeLoading}
+        onPress={() => void refreshStore()}
+        style={({ pressed }) => ({
+          backgroundColor: '#9A6700',
+          paddingHorizontal: 11,
+          paddingVertical: 6,
+          borderRadius: 6,
+          opacity: storeLoading ? 0.55 : pressed ? 0.75 : 1,
+        })}
+      >
+        <Text style={{ color: '#FFFFFF', fontFamily: t.fonts.bold, fontSize: 11 }}>
+          {storeLoading ? 'Đang thử…' : 'Kết nối lại'}
+        </Text>
+      </Pressable>
+    </View>
+  ) : null;
 
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={s.page}>
@@ -118,10 +161,14 @@ export function Screen({
             }
             contentContainerStyle={[s.content, { paddingBottom: contentPaddingBottom }, style]}
           >
+            {offlineBanner}
             {children}
           </ScrollView>
         ) : (
-          <View style={[s.content, { flex: 1, paddingBottom: contentPaddingBottom }, style]}>{children}</View>
+          <View style={[s.content, { flex: 1, paddingBottom: contentPaddingBottom }, style]}>
+            {offlineBanner}
+            {children}
+          </View>
         )}
       </KeyboardAvoidingView>
     </SafeAreaView>

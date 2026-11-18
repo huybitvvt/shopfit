@@ -982,8 +982,9 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
     def serialize_order(conn, row):
         items = []
         for item in conn.execute("SELECT * FROM order_items WHERE order_id=?", (row["id"],)):
-            review = conn.execute("SELECT actual_fit,notes,updated_at FROM fit_reviews WHERE order_item_id=?", (item["id"],)).fetchone()
-            items.append({**dict(item), "fit_review": dict(review) if review else None})
+            review = conn.execute("SELECT actual_fit,notes,share_public,updated_at FROM fit_reviews WHERE order_item_id=?", (item["id"],)).fetchone()
+            rev_dict = {"actual_fit": review["actual_fit"], "notes": review["notes"], "share_public": bool(review["share_public"]), "updated_at": review["updated_at"]} if review else None
+            items.append({**dict(item), "fit_review": rev_dict})
         data = dict(row)
         data.pop("request_key", None)
         data.pop("request_fingerprint", None)
@@ -1000,8 +1001,8 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
         if all_items:
             iids = [i["id"] for i in all_items]
             iph = ",".join("?" for _ in iids)
-            for rev in conn.execute(f"SELECT order_item_id,actual_fit,notes,updated_at FROM fit_reviews WHERE order_item_id IN ({iph})", tuple(iids)):
-                reviews_by_item[rev["order_item_id"]] = {"actual_fit": rev["actual_fit"], "notes": rev["notes"], "updated_at": rev["updated_at"]}
+            for rev in conn.execute(f"SELECT order_item_id,actual_fit,notes,share_public,updated_at FROM fit_reviews WHERE order_item_id IN ({iph})", tuple(iids)):
+                reviews_by_item[rev["order_item_id"]] = {"actual_fit": rev["actual_fit"], "notes": rev["notes"], "share_public": bool(rev["share_public"]), "updated_at": rev["updated_at"]}
         items_by_order: dict[str, list[dict]] = {oid: [] for oid in oids}
         for item in all_items:
             items_by_order[item["order_id"]].append({**item, "fit_review": reviews_by_item.get(item["id"])})

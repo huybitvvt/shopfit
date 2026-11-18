@@ -26,6 +26,16 @@ class WardrobeWrite(BaseModel):
 class FitReviewWrite(BaseModel):
     actual_fit: Literal["tight", "fits", "loose"]
     notes: str = Field(default="", max_length=1000)
+    share_public: bool = False
+
+
+def mask_customer_name(raw_name: str | None) -> str:
+    parts = [p for p in (raw_name or "").strip().split() if p]
+    if not parts:
+        return "Khách đã mua"
+    if len(parts) == 1:
+        return f"{parts[0][0].upper()}***"
+    return f"{parts[0][0].upper()}*** {parts[-1][0].upper()}***"
 
 
 def wardrobe_data(row):
@@ -93,17 +103,40 @@ def insight_routes(db, settings, current_user, admin):
                 raise HTTPException(404, "Không tìm thấy sản phẩm trong đơn của bạn.")
             if row["status"] != "completed":
                 raise HTTPException(409, "Chỉ đánh giá độ vừa sau khi đơn đã giao hoàn tất.")
-            conn.execute("""INSERT INTO fit_reviews VALUES (?,?,?,?,?) ON CONFLICT (order_item_id)
+            conn.execute("""INSERT INTO fit_reviews (order_item_id, user_id, actual_fit, notes, share_public, updated_at)
+                VALUES (?,?,?,?,?,?) ON CONFLICT (order_item_id)
                 DO UPDATE SET user_id=excluded.user_id,actual_fit=excluded.actual_fit,
-                notes=excluded.notes,updated_at=excluded.updated_at""", (item_id, user["id"], body.actual_fit, body.notes.strip(), now()))
-            return dict(conn.execute("SELECT actual_fit,notes,updated_at FROM fit_reviews WHERE order_item_id=?", (item_id,)).fetchone())
+                notes=excluded.notes,share_public=excluded.share_public,updated_at=excluded.updated_at""",
+                (item_id, user["id"], body.actual_fit, body.notes.strip(), 1 if body.share_public else 0, now()))
+            saved = conn.execute("SELECT actual_fit,notes,share_public,updated_at FROM fit_reviews WHERE order_item_id=?", (item_id,)).fetchone()
+            return {"actual_fit": saved["actual_fit"], "notes": saved["notes"], "share_public": bool(saved["share_public"]), "updated_at": saved["updated_at"]}
 
     @api.get("/products/{product_id}/fit-feedback")
     def feedback(product_id: str):
         with db.connect() as conn:
             if not conn.execute("SELECT 1 FROM products WHERE id=? AND active=1", (product_id,)).fetchone():
                 raise HTTPException(404, "Không tìm thấy sản phẩm.")
-            return {"rows": product_feedback(conn, product_id), "source": "completed_orders",
+            pub_rows = conn.execute("""
+                SELECT o.customer_name, i.size, i.color, r.actual_fit, r.notes, r.updated_at
+                FROM fit_reviews r
+                JOIN order_items i ON i.id = r.order_item_id
+                JOIN orders o ON o.id = i.order_id
+                WHERE i.product_id = ? AND o.status = 'completed' AND r.share_public = 1
+                ORDER BY r.updated_at DESC
+                LIMIT 8
+            """, (product_id,)).fetchall()
+            public_reviews = [
+                {
+                    "masked_user": mask_customer_name(pr["customer_name"]),
+                    "size": pr["size"],
+                    "color": pr["color"],
+                    "actual_fit": pr["actual_fit"],
+                    "notes": pr["notes"],
+                    "updated_at": pr["updated_at"],
+                }
+                for pr in pub_rows
+            ]
+            return {"rows": product_feedback(conn, product_id), "reviews": public_reviews, "source": "completed_orders",
                     "notice": "Cảm nhận tự báo cáo từ đơn đã giao, không phải phép đo hoặc tỷ lệ chính xác của AI. Ít hơn 3 phản hồi/size chưa đủ để nhận định."}
 
     @api.delete("/orders/{order_id}/items/{item_id}/fit-review", status_code=204)

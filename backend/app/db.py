@@ -217,7 +217,7 @@ class Database:
             );
             CREATE TABLE IF NOT EXISTS fit_reviews (
                 order_item_id INTEGER PRIMARY KEY REFERENCES order_items(id), user_id TEXT NOT NULL REFERENCES users(id),
-                actual_fit TEXT NOT NULL, notes TEXT NOT NULL, updated_at TEXT NOT NULL
+                actual_fit TEXT NOT NULL, notes TEXT NOT NULL, share_public INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS ai_calls (
                 id TEXT PRIMARY KEY, job_id TEXT, kind TEXT NOT NULL, angle TEXT, status TEXT NOT NULL,
@@ -257,6 +257,9 @@ class Database:
                 used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
             );
         """)
+        fit_review_cols = {r[1] for r in conn.execute("PRAGMA table_info(fit_reviews)")}
+        if "share_public" not in fit_review_cols:
+            conn.execute("ALTER TABLE fit_reviews ADD COLUMN share_public INTEGER NOT NULL DEFAULT 0")
         return seed_charts
 
     def _seed(self, conn, seed_charts):

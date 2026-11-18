@@ -6,8 +6,10 @@ import { useMemo, useState } from 'react';
 import { Modal, Platform, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
 import { mediaUrl } from '../../api';
 import { ProductFitFeedback } from '../../components/fit-feedback';
+import { ImageLightbox } from '../../components/image-lightbox';
 import { SizeTable, SizingAdvice } from '../../components/sizing';
 import { Button, CartButton, Empty, Header, IconButton, Screen, ToastOverlay, s } from '../../components/ui';
+import { tapLight } from '../../haptics';
 import { useStore } from '../../store';
 import { money, theme as t } from '../../theme';
 
@@ -22,6 +24,7 @@ function ProductContent({ id }: { id: string }) {
   const [colorChoice, setColor] = useState('');
   const [sizeChoice, setSize] = useState('');
   const [selectedImgIdx, setSelectedImgIdx] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   const [sizeGuide, setSizeGuide] = useState(false);
   const wide = useWindowDimensions().width >= 800;
 
@@ -85,12 +88,40 @@ function ProductContent({ id }: { id: string }) {
       <Header title="The collection" subtitle="SHOPFIT STUDIO" back right={<CartButton />} />
       <View style={{ flexDirection: wide ? 'row' : 'column', gap: wide ? 48 : 28 }}>
         <View style={{ width: wide ? '48%' : '100%' }}>
-          <Image
-            source={mediaUrl(allImages[selectedImgIdx]?.url || product.image_url)}
-            contentFit="cover"
-            style={{ width: '100%', aspectRatio: 0.8, borderRadius: 16, backgroundColor: t.colors.sand }}
-            accessibilityLabel={product.name}
-          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Phóng to ảnh ${product.name}`}
+            onPress={() => {
+              tapLight();
+              setLightboxOpen(true);
+            }}
+            style={({ pressed }) => ({ position: 'relative', opacity: pressed ? 0.92 : 1 })}
+          >
+            <Image
+              source={mediaUrl(allImages[selectedImgIdx]?.url || product.image_url)}
+              contentFit="cover"
+              style={{ width: '100%', aspectRatio: 0.8, borderRadius: 16, backgroundColor: t.colors.sand }}
+              accessibilityLabel={product.name}
+            />
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                bottom: 12,
+                right: 12,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 5,
+                backgroundColor: 'rgba(20, 26, 23, 0.72)',
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                borderRadius: 16,
+              }}
+            >
+              <Ionicons name="expand-outline" size={14} color="#FFFFFF" />
+              <Text style={{ color: '#FFFFFF', fontFamily: t.fonts.medium, fontSize: 11 }}>Phóng to</Text>
+            </View>
+          </Pressable>
           {allImages.length > 1 && (
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
               {allImages.map((img, idx) => {
@@ -100,7 +131,10 @@ function ProductContent({ id }: { id: string }) {
                     key={img.label}
                     accessibilityRole="button"
                     accessibilityState={{ selected: isSelected }}
-                    onPress={() => setSelectedImgIdx(idx)}
+                    onPress={() => {
+                      tapLight();
+                      setSelectedImgIdx(idx);
+                    }}
                     style={{
                       borderWidth: 2,
                       borderColor: isSelected ? t.colors.green : '#E5E1D8',
@@ -172,7 +206,10 @@ function ProductContent({ id }: { id: string }) {
                 accessibilityRole="button"
                 accessibilityLabel={`Màu ${c.name}`}
                 accessibilityState={{ selected: color === c.name }}
-                onPress={() => setColor(c.name)}
+                onPress={() => {
+                  tapLight();
+                  setColor(c.name);
+                }}
                 style={{
                   minHeight: 48,
                   paddingHorizontal: 10,
@@ -209,7 +246,10 @@ function ProductContent({ id }: { id: string }) {
                   accessibilityRole="button"
                   accessibilityLabel={`Size ${value}`}
                   accessibilityState={{ selected: isSelected }}
-                  onPress={() => setSize(value)}
+                  onPress={() => {
+                    tapLight();
+                    setSize(value);
+                  }}
                   style={{
                     minWidth: 52,
                     height: 48,
@@ -270,6 +310,13 @@ function ProductContent({ id }: { id: string }) {
           <ProductFitFeedback productId={product.id} />
         </View>
       </View>
+
+      <ImageLightbox
+        visible={lightboxOpen}
+        images={allImages.map(img => ({ url: img.url, label: `${product.name} · ${img.label}` }))}
+        initialIndex={selectedImgIdx}
+        onClose={() => setLightboxOpen(false)}
+      />
 
       <Modal visible={sizeGuide} animationType="slide" onRequestClose={() => setSizeGuide(false)}>
         <Screen>

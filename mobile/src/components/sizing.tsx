@@ -3,6 +3,7 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { request } from '../api';
+import { tapSuccess } from '../haptics';
 import { useStore } from '../store';
 import { theme as t } from '../theme';
 import type { GarmentSize, Product, SizeAdvice, WardrobeItem } from '../types';
@@ -177,6 +178,7 @@ function SizingAdviceContent({
         body: JSON.stringify(preset.data),
       });
       await fetchAdvice();
+      tapSuccess();
       notify(`Đã áp dụng thông số vóc dáng ${preset.label}.`);
     } catch (e) {
       setError((e as Error).message);

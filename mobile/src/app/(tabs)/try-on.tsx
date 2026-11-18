@@ -9,6 +9,7 @@ import { FourView } from '../../components/four-view';
 import { SizingAdvice } from '../../components/sizing';
 import { TopUpModal } from '../../components/top-up-modal';
 import { Button, CartButton, ErrorMessage, Header, Screen, SectionHeading, s } from '../../components/ui';
+import { tapLight, tapSuccess } from '../../haptics';
 import { finishRequestKey, pendingRequestKey } from '../../request-key';
 import { useStore } from '../../store';
 import { dateLabel, money, theme as t } from '../../theme';
@@ -209,6 +210,7 @@ function FittingRoomContent() {
       const key = await pendingRequestKey(scope, JSON.stringify([photo.uri, product.id, color, size]));
       setJob(await request<TryOn>('/api/tryons', { method: 'POST', body: form, headers: { 'X-Idempotency-Key': key } }, 60000));
       await finishRequestKey(scope);
+      tapSuccess();
       void refreshQuota();
       await loadHistory();
     } catch (e) {
@@ -432,6 +434,7 @@ function FittingRoomContent() {
                 accessibilityState={{ selected: product?.id === p.id }}
                 disabled={locked}
                 onPress={() => {
+                  tapLight();
                   setSelectedId(p.id);
                   setSize('');
                   setJob(null);
@@ -466,6 +469,7 @@ function FittingRoomContent() {
                     variant={c.name === color ? 'primary' : 'outline'}
                     disabled={locked}
                     onPress={() => {
+                      tapLight();
                       setColor(c.name);
                       setJob(null);
                     }}
@@ -488,6 +492,7 @@ function FittingRoomContent() {
                       accessibilityState={{ selected: isSelected }}
                       disabled={locked}
                       onPress={() => {
+                        tapLight();
                         setSize(value);
                         setJob(null);
                       }}

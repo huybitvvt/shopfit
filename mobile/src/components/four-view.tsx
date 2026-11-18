@@ -3,9 +3,11 @@ import { Image } from 'expo-image';
 import { useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, Share, Text, TextInput, View } from 'react-native';
 import { mediaUrl, request } from '../api';
+import { tapLight } from '../haptics';
 import { useStore } from '../store';
 import { theme as t } from '../theme';
 import type { Angle, TryOn } from '../types';
+import { ImageLightbox, LightboxImage } from './image-lightbox';
 import { Button, IconButton, ToastOverlay, s } from './ui';
 
 export const angles: Angle[] = ['front', 'left', 'back', 'right'];
@@ -22,6 +24,7 @@ export function FourView({ job }: { job: TryOn }) {
   const { notify } = useStore();
   const [index, setIndex] = useState(0);
   const [original, setOriginal] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   const [reporting, setReporting] = useState(false);
   const [selectedReason, setSelectedReason] = useState(REPORT_REASONS[0]);
   const [details, setDetails] = useState('');
@@ -36,7 +39,19 @@ export function FourView({ job }: { job: TryOn }) {
   const url = original ? job.photo_url : view?.url;
   const count = job.views.filter(v => v.status === 'completed').length;
 
+  const lightboxImages: LightboxImage[] = [
+    ...job.views
+      .filter((v): v is typeof v & { url: string } => v.status === 'completed' && Boolean(v.url))
+      .map(v => ({
+        url: v.url,
+        label: `${job.product_name || 'Ảnh thử AI'} · Góc ${angleLabels[v.angle].toLowerCase()}`,
+      })),
+    ...(job.photo_url ? [{ url: job.photo_url, label: 'Ảnh gốc trước khi thử đồ' }] : []),
+  ];
+  const currentLightboxIdx = url ? Math.max(0, lightboxImages.findIndex(img => img.url === url)) : 0;
+
   function select(next: number) {
+    tapLight();
     setIndex((next + availableAngles.length) % availableAngles.length);
     setOriginal(false);
   }
@@ -84,14 +99,42 @@ export function FourView({ job }: { job: TryOn }) {
         </View>
       )}
 
-      <View style={{ width: '100%', aspectRatio: 3 / 4, backgroundColor: t.colors.sand, borderRadius: 14, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{ width: '100%', aspectRatio: 3 / 4, backgroundColor: t.colors.sand, borderRadius: 14, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
         {url ? (
-          <Image
-            source={mediaUrl(url)}
-            contentFit="contain"
-            accessibilityLabel={original ? 'Ảnh gốc trước khi thử đồ' : isMulti ? `Ảnh thử đồ góc ${angleLabels[angle].toLowerCase()}` : 'Ảnh thử đồ của bạn'}
-            style={{ width: '100%', height: '100%' }}
-          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Phóng to ảnh thử đồ để xem chi tiết"
+            onPress={() => {
+              tapLight();
+              setLightboxOpen(true);
+            }}
+            style={({ pressed }) => ({ width: '100%', height: '100%', opacity: pressed ? 0.92 : 1 })}
+          >
+            <Image
+              source={mediaUrl(url)}
+              contentFit="contain"
+              accessibilityLabel={original ? 'Ảnh gốc trước khi thử đồ' : isMulti ? `Ảnh thử đồ góc ${angleLabels[angle].toLowerCase()}` : 'Ảnh thử đồ của bạn'}
+              style={{ width: '100%', height: '100%' }}
+            />
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                bottom: 10,
+                right: 10,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 5,
+                backgroundColor: 'rgba(20, 26, 23, 0.72)',
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 14,
+              }}
+            >
+              <Ionicons name="expand-outline" size={13} color="#FFFFFF" />
+              <Text style={{ color: '#FFFFFF', fontFamily: t.fonts.medium, fontSize: 11 }}>Phóng to</Text>
+            </View>
+          </Pressable>
         ) : (
           <View style={{ padding: 24, alignItems: 'center', gap: 12 }}>
             {['processing', 'pending', 'validating'].includes(view?.status || '') && <ActivityIndicator color={t.colors.green} />}
@@ -193,6 +236,13 @@ export function FourView({ job }: { job: TryOn }) {
       <Text style={[s.muted, { fontSize: 11, lineHeight: 18 }]}>
         {isMulti ? 'Trái/phải theo phía cơ thể người mặc. Góc khuất là AI suy diễn; ảnh mặt sau sản phẩm do shop cung cấp sẽ giúp giữ đúng chi tiết.' : 'Ảnh được tạo bằng AI dựa trên vóc dáng và số đo của bạn. Dùng nút so sánh để đối chiếu với ảnh gốc.'}
       </Text>
+
+      <ImageLightbox
+        visible={lightboxOpen}
+        images={lightboxImages}
+        initialIndex={currentLightboxIdx}
+        onClose={() => setLightboxOpen(false)}
+      />
 
       {/* Report Modal */}
       <Modal visible={reporting} transparent animationType="fade" onRequestClose={() => setReporting(false)}>

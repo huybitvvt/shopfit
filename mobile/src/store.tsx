@@ -12,6 +12,7 @@ import {
   setToken,
   setUnauthorizedHandler,
 } from './api';
+import { tapLight, tapMedium } from './haptics';
 import { registerForPushNotificationsAsync } from './notifications';
 import type { CartLine, Health, Product, User, UserQuota } from './types';
 
@@ -31,6 +32,7 @@ function isLocalApiUrl(url: string) {
 type Store = {
   products: Product[];
   loading: boolean;
+  offline: boolean;
   error: string | null;
   health: Health | null;
   user: User | null;
@@ -62,7 +64,9 @@ const Context = createContext<Store | null>(null);
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [products, setProducts] = useState<Product[]>([]);
+  const productsRef = useRef<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [offline, setOffline] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -108,9 +112,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         request<Product[]>('/api/products', {}, IS_REMOTE_WEB ? 45000 : 12000),
         request<Health>('/api/health', {}, IS_REMOTE_WEB ? 45000 : 12000),
       ]);
+      productsRef.current = list;
       setProducts(list);
       setHealth(status);
+      setOffline(false);
       setError(null);
+      void AsyncStorage.setItem('shopfit-products-cache', JSON.stringify(list));
     } catch (e) {
       // Only fallback in local development from a local host -> Render Cloud.
       // Never poison a production or remote web session with localhost!
@@ -121,9 +128,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             request<Product[]>('/api/products', {}, 25000),
             request<Health>('/api/health', {}, 25000),
           ]);
+          productsRef.current = list;
           setProducts(list);
           setHealth(status);
+          setOffline(false);
           setError(null);
+          void AsyncStorage.setItem('shopfit-products-cache', JSON.stringify(list));
           return;
         } catch {
           setApiUrl(originalUrl);
@@ -131,7 +141,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       } else {
         setApiUrl(originalUrl);
       }
-      setError((e as Error).message);
+
+      if (productsRef.current.length === 0) {
+        try {
+          const cachedRaw = await AsyncStorage.getItem('shopfit-products-cache');
+          if (cachedRaw) {
+            const cachedList: Product[] = JSON.parse(cachedRaw);
+            if (Array.isArray(cachedList) && cachedList.length > 0) {
+              productsRef.current = cachedList;
+              setProducts(cachedList);
+            }
+          }
+        } catch {
+          // Ignore malformed offline cache
+        }
+      }
+
+      if (productsRef.current.length > 0) {
+        setOffline(true);
+        setError(null);
+      } else {
+        setError((e as Error).message);
+      }
     } finally {
       setLoading(false);
     }
@@ -152,11 +183,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void (async () => {
       try {
-        const [saved, cartJson, server] = await Promise.all([
+        const [saved, cartJson, server, cachedProductsJson] = await Promise.all([
           sessionStorage.get(),
           AsyncStorage.getItem('shopfit-cart'),
           AsyncStorage.getItem('shopfit-server'),
+          AsyncStorage.getItem('shopfit-products-cache'),
         ]);
+        if (cachedProductsJson) {
+          try {
+            const cachedList: Product[] = JSON.parse(cachedProductsJson);
+            if (Array.isArray(cachedList) && cachedList.length > 0) {
+              productsRef.current = cachedList;
+              setProducts(cachedList);
+            }
+          } catch {
+            // Ignore malformed cached catalog
+          }
+        }
         const envUrl = process.env.EXPO_PUBLIC_API_URL;
         if (IS_REMOTE_WEB) {
           setApiUrl(envUrl || PRODUCTION_API_URL);
@@ -366,7 +409,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setToken(null);
       setUser(null);
       setCart([]);
+      productsRef.current = [];
       setProducts([]);
+      setOffline(false);
       setHealth(null);
       await AsyncStorage.setItem('shopfit-server', url);
       setApiUrl(url);
@@ -376,6 +421,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const toggleFavorite = useCallback((id: string) => {
+    tapLight();
     setFavorites(ids => (ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]));
   }, []);
 
@@ -399,6 +445,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           ? items.map(i => (i.key === key ? { ...i, product, quantity: i.quantity + 1 } : i))
           : [...items, { key, product, size, color, quantity: 1 }];
       });
+      if (added) tapMedium();
       notify(added ? 'Đã thêm vào giỏ hàng.' : 'Số lượng trong giỏ đã đạt mức tối đa tồn kho của mẫu này.');
     },
     [notify]
@@ -441,6 +488,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     () => ({
       products,
       loading,
+      offline,
       error,
       health,
       user,
@@ -470,6 +518,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [
       products,
       loading,
+      offline,
       error,
       health,
       user,

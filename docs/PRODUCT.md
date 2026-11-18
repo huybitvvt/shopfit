@@ -1,34 +1,32 @@
-# ShopFit: phạm vi bản demo hoàn chỉnh
+# ShopFit Studio: Phạm vi Sản phẩm & Kịch bản Bảo vệ Đồ án
 
-Định vị: **xem mình mặc, hiểu vì sao vừa, đối chiếu với thực tế** cho một shop nhỏ.
+Định vị: **“Xem mình mặc · Hiểu vì sao vừa · Đối chiếu với thực tế”** dành cho cửa hàng thời trang vừa và nhỏ trên nền tảng di động.
 
-## Ba phần khác biệt được tự xây
+## Ba giá trị cốt lõi tự xây dựng
 
-1. **Bản đồ độ vừa có giải thích.** Đối chiếu vòng cơ thể với vòng thành phẩm, hiển thị thiếu độ dư / đạt mục tiêu / dư nhiều hơn; chạm từng vùng để đọc con số. Dư nhiều hơn nghĩa là vượt mục tiêu hơn 4 cm, là ngưỡng quy tắc hiện tại của app. Sơ đồ không mô phỏng vải hay áp lực cơ thể.
-2. **So với đồ đang mặc vừa.** Khách tự lưu số đo quần áo yêu thích theo cách đo thống nhất, chọn món cùng loại để so từng vòng, dài/vai/chân. Không cần suy số đo từ chiều cao/cân nặng. Đồ tham chiếu riêng theo tài khoản, có thể sửa/xóa.
-3. **Phản hồi sau đơn đã giao.** Khách chủ động chia sẻ chật/vừa/rộng và ghi chú từ sản phẩm trong đơn hoàn tất. Một dòng đơn chỉ tính một mẫu; sửa thay thế kết quả cũ, có thể gỡ phản hồi. Shop thấy số lượng theo sản phẩm/size, không thấy ảnh thử hoặc số đo khách trong dashboard này.
+1. **Bản đồ độ vừa có giải thích (`FitMap` 3 vùng):** Đối chiếu vòng cơ thể người mặc (`Ngực · Eo · Mông`) với thông số thành phẩm từng size và độ dư mục tiêu (`ease`), hiển thị trực quan trên phác họa thời trang (`Atelier Silhouette`) cùng thước đo 5 nấc (`Chật` → `Ôm sát` → `CHUẨN ĐẸP` → `Thoải mái` → `Rộng`). Bất kỳ vùng nào bị âm độ dư đều tự động bật cảnh báo đỏ để tránh chọn nhầm size.
+2. **Đối chiếu trực tiếp với đồ đang mặc vừa (`Tủ đồ tham chiếu`):** Khách tự lưu số đo chiếc áo/quần/đầm yêu thích ở nhà theo cách đo phẳng thống nhất để so sánh từng cm chênh lệch mà không bắt buộc phải có thước dây đo cơ thể; hoặc dùng bộ khung vóc dáng chuẩn Nam/Nữ (`S, M, L, XL`) chọn nhanh 1 chạm.
+3. **Phản hồi size xác thực từ đơn hàng đã giao (`Verified Fit Feedback`):** Chỉ khách hàng có đơn ở trạng thái `Đã giao` mới được gửi cảm nhận `Chật / Vừa / Rộng`. Mỗi dòng sản phẩm trong đơn tính đúng 1 mẫu thống kê; khách có quyền giữ riêng tư ghi chú cho chủ shop hoặc bật chia sẻ ẩn danh (`N*** A***`) trên trang sản phẩm để hỗ trợ người mua sau.
 
-Dashboard đánh dấu cần kiểm tra nếu có ít nhất 3 phản hồi cho một size và ít nhất 50% báo chật/rộng. Đây là ngưỡng sàng lọc nhỏ cho demo, không chứng minh ý nghĩa thống kê, không tự thay đổi bảng đo. Nhãn “đã mua” xác nhận quan hệ đơn hàng, không xác nhận tính đúng đắn của cảm nhận.
+Dashboard tự động gắn cờ nhắc chủ shop kiểm tra lại phom/bảng đo khi một size có từ `3` phản hồi trở lên và tối thiểu `50%` báo chật hoặc rộng (không tự ý sửa đè số đo gốc của shop).
 
-## Vận hành AI
+## Kiến trúc Vận hành AI & Thương mại An toàn
 
-- Client lưu mã yêu cầu ngẫu nhiên theo dấu vân tay của nội dung; gửi lại sau mất phản hồi dùng cùng mã. Server ràng buộc mã vào nội dung và tài khoản, không tạo thêm job hoặc trừ kho hai lần. Mã đã dùng với nội dung khác trả lỗi; job đã xóa không bị tự tạo lại.
-- Hàng đợi và trạng thái từng góc được lưu PostgreSQL trên Supabase Singapore (SQLite khi offline). Sau restart, tiếp tục việc chưa gọi tạo ảnh và kiểm tra ảnh ứng viên đã lưu. Góc gián đoạn trong lúc gọi tạo ảnh cần người dùng tự chọn retry, vì chưa biết provider đã tính phí hay chưa. Không hứa exactly-once ở provider khi mạng lỗi.
-- Ảnh ứng viên được lưu riêng trước kiểm tra; lỗi kiểm tra tạm thời chỉ kiểm tra lại ảnh đó, không tạo lại ảnh tính phí. Ảnh sai trang phục bị loại và không cấp URL kết quả.
-- Mỗi lời gọi được ghi dự trù trước khi gọi. Lời gọi lỗi/không rõ kết quả vẫn giữ dự trù; có trần số request và dự trù USD theo UTC. SDK được cấu hình một network attempt. Giá cấu hình không phải token usage/hóa đơn thực; cần đối chiếu billing Google.
-- Chỉ hỗ trợ một tiến trình Uvicorn cho worker hiện tại; đây chưa phải hệ thống queue phân tán.
+- **Chống tạo trùng (`X-Idempotency-Key`):** Mọi thao tác nhạy cảm (tạo lượt thử AI, thử lại góc lỗi, đặt đơn hàng) đều gắn khóa bất biến theo nội dung và tài khoản, ngăn trừ tồn kho hoặc trừ lượt thử hai lần khi mạng di động chập chờn.
+- **Hàng đợi 4 góc nhìn bền vững:** Trạng thái từng góc (`front`, `left`, `back`, `right`) được lưu trên Supabase PostgreSQL (hoặc SQLite khi chạy cục bộ), kết hợp lưu trữ đối tượng S3 giúp không mất ảnh khi máy chủ khởi động lại.
+- **Kiểm duyệt hai lớp & Sổ cái ngân sách (`AI Usage Ledger`):** Kiểm tra ảnh đầu vào trước khi sinh ảnh, đối chiếu trang phục ở ảnh đầu ra và ghi nhận ngân sách dự trù theo ngày UTC để tránh vượt trần chi phí API.
+- **Thanh toán & Hạng thành viên minh bạch:** Đơn nạp lượt VietQR yêu cầu xác thực chữ ký Webhook hoặc phê duyệt từ chủ shop (`chushop`); chiết khấu hạng thành viên VIP (`Đồng · Bạc · Vàng · Kim Cương`) chỉ nâng hạng dựa trên tổng chi tiêu thực tế của các đơn đã hoàn tất.
 
-## Dữ liệu anh bổ sung sau
+## Kịch bản Bảo vệ Đồ án (5–7 phút trên Điện thoại / APK + Web)
 
-Chủ dự án đã xác nhận sẽ nhập dữ liệu sản phẩm thật sau. Dữ liệu seed tiếp tục gắn nhãn minh họa, không tự đánh dấu đã đo. Với mỗi sản phẩm cần ảnh đúng màu chính diện, ảnh mặt sau nếu có, số đo thực từng size, chất liệu/phom và tồn kho. Vào Quản trị → thêm sản phẩm → Bảng số đo & ảnh sau → xác nhận sau khi đo.
-
-Chưa thu thập ảnh đối chứng từ người thật. Quy trình đánh giá có trong `FITTING.md`; app không tự tạo ảnh AI để giả dữ liệu mặc thật. Không công bố phần trăm chính xác hoặc tỷ lệ giảm hoàn hàng khi chưa có nghiên cứu.
-
-## Kịch bản bảo vệ 5–7 phút
-
-1. Khách lưu hồ sơ và một áo đang mặc vừa.
-2. Mở áo shop: đổi M/L, xem vùng ngực đổi trạng thái, đọc lời giải thích và so dài áo.
-3. Chọn size → kiểm tra ảnh toàn thân → tạo bốn góc, hoặc mở lượt mẫu đã có nếu demo bị giới hạn mạng.
-4. Chuyển góc bằng mũi tên và so mặt trước với ảnh gốc; mở phần đối chiếu mặc thật (nếu chưa có dữ liệu thì giữ trạng thái trống).
-5. Đơn đã giao → chia sẻ cảm nhận size; chủ shop mở dashboard, kiểm tra số mẫu và bảng size.
-6. Trình bày kết quả test và giới hạn: API ảnh là phần tích hợp; quy tắc size, so tham chiếu, phản hồi theo đơn và phục hồi tác vụ là logic tự xây.
+1. **Trải nghiệm Khách hàng & Tư vấn Size (1.5 phút):**
+   - Mở ứng dụng bằng tài khoản `khachhang@shopfit.vn` (`123456`).
+   - Chọn sản phẩm **Áo sơ mi Linen** → chạm phóng to toàn màn hình `2x` xem 3 góc ảnh (Trước / Sau / Cận chất vải).
+   - Chuyển đổi giữa size `S`, `M`, `L` để hội đồng quan sát **FitMap 3 vùng**, đối chiếu với **Sơ mi công sở đang mặc vừa** và đọc mục **Người đã mua nói gì về size?** (biểu đồ + nhận xét ẩn danh `N*** A***`).
+2. **Phòng thử đồ ảo AI 4 góc & Mua hàng Try-to-Buy (2 phút):**
+   - Chuyển sang **Phòng thử AI**, chụp/chọn ảnh toàn thân → hệ thống tự nén ảnh trên máy và kiểm duyệt tư thế.
+   - Xem kết quả 4 góc (`Trước · Trái · Sau · Phải`), bấm so sánh với ảnh gốc, phóng to `2x` và nhấn nút **Thêm ngay Size M vào giỏ** ngay dưới ảnh kết quả → áp dụng ưu đãi VIP / Voucher và đặt hàng COD.
+3. **Kiểm chứng Năng lực Di động Ngoại tuyến & AdMob (1 phút):**
+   - Trên máy Android cài `ShopFit-preview.apk`: chỉ ra Google Test Adaptive Banner ở cuối trang chủ, sau đó bật **Chế độ máy bay (Airplane Mode)** để chứng minh danh mục, bảng size và giỏ hàng vẫn hoạt động mượt từ bộ nhớ đệm ngoại tuyến kèm thanh thông báo kết nối lại.
+4. **Góc nhìn Chủ Shop & Phân tích Chuyển đổi AI (1.5 phút):**
+   - Đăng nhập tài khoản `chushop` (`123`) → vào **Quản trị sản phẩm** xem thống kê **AI Retail Analytics (`Try-to-Buy Rate`)**, bộ lọc sắp hết hàng và trình sửa sản phẩm đa màu/size; qua **Đơn hàng** bấm duyệt nhanh 1 chạm `Xác nhận` → `Đang giao` → `Đã giao`.

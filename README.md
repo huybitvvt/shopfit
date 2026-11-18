@@ -1,170 +1,143 @@
-# ShopFit
+# ShopFit Studio — Ứng dụng TMĐT Thời trang tích hợp Phòng thử đồ ảo AI 4 góc & Tư vấn Size thông minh
 
-Ứng dụng React Native + TypeScript cho một shop thời trang, tích hợp **OpenVTO → Gemini** để thử trang phục trên ảnh khách hàng.
+[![CI](https://github.com/huybitvvt/shopfit/actions/workflows/ci.yml/badge.svg)](https://github.com/huybitvvt/shopfit/actions/workflows/ci.yml)
 
-Phạm vi hiện tại: chạy bản web phát triển tại **http://localhost:8081**, API tại **http://localhost:8000**. Chưa cần cài Android; các hướng dẫn APK bên dưới dành cho giai đoạn sau. Dữ liệu sản phẩm thật sẽ do chủ shop bổ sung, dữ liệu mẫu vẫn gắn nhãn minh họa.
+**ShopFit Studio** là đồ án môn **Phát triển Ứng dụng Di động**, kết hợp luồng mua sắm thương mại điện tử thời trang hoàn chỉnh trên thiết bị di động (Android / iOS / Web) với **Phòng thử đồ ảo AI 4 góc nhìn** (Gemini / OpenVTO) và **Hệ thống tư vấn chọn size có giải thích (FitMap & Tủ đồ tham chiếu)**.
 
-## Phần đã triển khai
+Định vị cốt lõi: **“Xem mình mặc · Hiểu vì sao vừa · Đối chiếu với thực tế”** — giúp khách mua online tự tin chọn đúng size, đồng thời cung cấp công cụ quản trị tồn kho đa biến thể và phân tích chuyển đổi AI (`Try-to-Buy`) cho chủ shop.
 
-- Danh mục, tìm kiếm, lọc theo loại, sắp xếp theo giá, chi tiết sản phẩm, màu/size và yêu thích.
-- Đăng ký/đăng nhập; hai vai trò khách hàng và chủ shop. Token lưu bằng SecureStore trên Android/iOS, bộ nhớ trình duyệt trên bản web phát triển.
-- Giỏ hàng lưu cục bộ; đặt hàng COD; giá do server tính lại; tồn kho theo màu/size cập nhật trong transaction.
-- Khách hủy đơn chờ xác nhận; shop xác nhận, giao hàng và hoàn tất. Hủy đơn hoàn kho đúng một lần.
-- Shop thêm sản phẩm với ảnh tải lên, sửa giá/tên/tồn kho, ẩn/hiện sản phẩm; thống kê từ dữ liệu thật.
-- Hồ sơ chiều cao/cân nặng/các vòng đo; bảng số đo thành phẩm riêng từng sản phẩm, shop xác nhận dữ liệu đã đo; tư vấn size có giải thích độ dư vải và xét tồn kho.
-- Bản đồ độ vừa theo ngực/eo/mông; lưu, sửa và xóa số đo món đồ đang mặc vừa để so sánh từng size với sản phẩm shop.
-- Phản hồi chật/vừa/rộng gắn sản phẩm trong đơn đã giao; shop xem số mẫu theo size và cờ cần kiểm tra số đo, không tự sửa bảng đo.
-- Phòng thử: chọn trang phục/màu/size → kiểm tra ảnh toàn thân → OpenVTO/Gemini tạo **4 ảnh trước–trái–sau–phải** → chuyển ảnh bằng **mũi tên**, so sánh trước/sau và lưu lịch sử.
-- Các góc bên/sau lấy ảnh đã thử làm tham chiếu, được AI kiểm tra trang phục/hướng quay; góc lỗi không hiển thị như kết quả thành công. Tạo lại chỉ gọi các góc thiếu, tối đa 2 lần/lượt trong ngày.
-- Đối chiếu với ảnh mặc thật, chấm ba tiêu chí và ghi nhận cảm nhận chật/vừa/rộng. Ảnh đối chứng cũng lưu riêng theo tài khoản.
-- Khóa Gemini chỉ nằm ở backend. Ảnh người dùng không đặt trong thư mục public; liên kết ảnh được ký và hết hạn sau 1 giờ.
-- Chống gửi trùng lượt thử/đặt hàng/tạo lại khi mất phản hồi; hàng đợi PostgreSQL trên Supabase, tiếp tục phần việc an toàn sau restart, giữ ảnh ứng viên để chỉ kiểm tra lại khi lỗi vision. Trần số lời gọi và ngân sách dự trù AI theo ngày UTC.
-- Tích hợp mã nguồn banner AdMob thử nghiệm ở cuối danh mục Android; web/Expo Go bỏ qua SDK. Chưa xác nhận quảng cáo trên thiết bị. Hướng dẫn chạy và kịch bản video nộp bài: [docs/ADMOB.md](docs/ADMOB.md).
+---
 
-**Đã kiểm thử bộ bốn ảnh Gemini thực tế** qua OpenVTO: lần kiểm tra sau khi sửa tham chiếu hoàn tất trong 49,9 giây, giữ cùng áo thun ở bốn góc. Dùng avatar tổng hợp của OpenVTO và số đo minh họa, chưa chứng minh độ vừa khi mặc thật. Không tạo video hay mô hình 3D.
+## 1. Liên kết Triển khai Thực tế (Production) & Tài khoản Bảo vệ Đồ án
 
-## Cấu trúc
-
-```text
-mobile/                  Expo / React Native / TypeScript; giao diện tự xây
-  src/app/               Expo Router: catalog, phòng thử, hồ sơ, đối chiếu, giỏ, đơn, quản trị
-  src/                   API client, state, kiểu dữ liệu, thành phần giao diện
-backend/
-  app/                   FastAPI, PostgreSQL/Supabase, tài khoản, bán hàng, xử lý tác vụ
-  vendor/openvto/        SDK OpenVTO upstream, MIT, kèm giấy phép và commit nguồn
-  tests/                 Kiểm thử API và hợp đồng tích hợp OpenVTO
-  data/                  Ảnh runtime, backup và SQLite khi chạy offline; không đưa vào Git
-supabase/                Cấu hình CLI và migration PostgreSQL
-design-system/           Hệ thống thiết kế
-docs/                    Kiến trúc và nguồn tham khảo
-```
-
-## Chạy trên Windows PowerShell
-
-Yêu cầu: Node.js LTS, Python 3.10+.
-
-Trên máy khác, lấy mã nguồn:
-
-```powershell
-git clone https://github.com/huybitvvt/shopfit.git
-Set-Location shopfit
-```
-
-Nếu đã clone repo, chạy `git pull --ff-only` trong thư mục repo để cập nhật. Git không chứa các file `.env`, database và ảnh runtime; tạo lại cấu hình theo bước 2, sao lưu riêng `backend/data/` nếu cần chuyển dữ liệu cũ.
-
-### 1. Cài thư viện
-
-Từ thư mục gốc repo:
-
-```powershell
-npm.cmd --prefix mobile ci
-python -m venv backend/.venv
-Set-Location backend
-.\.venv\Scripts\python.exe -m pip install -r requirements-lock.txt
-Set-Location ..
-```
-
-Nếu môi trường hiện tại đã được dựng sẵn thì bỏ qua bước cài.
-
-### 2. Cấu hình
-
-Tạo `backend/.env` từ `backend/.env.example`, điền:
-
-Database chính dùng **Supabase Singapore**. Thêm `DATABASE_URL` lấy từ **Connect → Session pooler** vào `backend/.env`; xem [docs/SUPABASE.md](docs/SUPABASE.md) để cấu hình, push schema và chuyển dữ liệu cũ. Để trống URL nếu chỉ chạy SQLite offline. Giữ mật khẩu database ở backend.
-
-```dotenv
-GEMINI_API_KEY=your-api-key
-GEMINI_IMAGE_MODEL=gemini-3.1-flash-lite-image
-GEMINI_VISION_MODEL=gemini-2.5-flash
-```
-
-Dùng model có khả năng **sinh/chỉnh sửa ảnh**, không dùng model chỉ trả văn bản. Kiểm tra model đang mở cho tài khoản theo tài liệu Google và đổi `GEMINI_IMAGE_MODEL` nếu cần. Khởi động lại API sau khi sửa `.env`.
-
-Không đưa API key vào mã nguồn, chat, `EXPO_PUBLIC_*` hoặc app đã build.
-
-`mobile/.env`:
-
-```dotenv
-EXPO_PUBLIC_API_URL=http://localhost:8000
-```
-
-| Chạy app ở đâu | URL backend |
-| --- | --- |
-| Web trên máy này / iOS simulator | `http://localhost:8000` |
-| Android emulator | `http://10.0.2.2:8000` |
-| Điện thoại thật, cùng Wi-Fi | `http://<IPv4-LAN-của-máy>:8000` |
-
-Đổi URL xong cần khởi động lại Expo. Bản web dùng CORS theo `CORS_ORIGINS` trong backend `.env`; bổ sung đúng origin nếu đổi port/hostname. Trên điện thoại thật, cho phép Python qua Windows Firewall trong mạng riêng nếu kết nối bị chặn.
-
-### 3. Chạy hai terminal
-
-Terminal 1, tại thư mục gốc:
-
-```powershell
-npm.cmd run api
-```
-
-Terminal 2:
-
-```powershell
-npm.cmd start
-```
-
-Quét QR bằng Expo Go tương thích **SDK 57** để xem các chức năng shop (không có AdMob). Quảng cáo cần bản Android build có SDK native; xem [docs/ADMOB.md](docs/ADMOB.md). Bản xem trước trình duyệt:
-
-```powershell
-npm.cmd run web
-```
-
-API docs: <http://localhost:8000/docs>. Health check: <http://localhost:8000/api/health>.
-
-Bản Android: xem [docs/ANDROID.md](docs/ANDROID.md) để build/cài APK. Có thể đổi URL backend ngay trong app tại **Cá nhân → Kết nối shop**, không cần build lại. Phạm vi và kịch bản bảo vệ: [docs/PRODUCT.md](docs/PRODUCT.md).
-
-### Tài khoản phát triển
-
-| Vai trò | Email | Mật khẩu mặc định |
+| Thành phần | Địa chỉ truy cập | Ghi chú |
 | --- | --- | --- |
-| Khách hàng | `khach@shopfit.local` | `Shopfit123!` |
-| Chủ shop | `shop@shopfit.local` | `ShopfitAdmin123!` |
+| **Ứng dụng Web / Mobile PWA (Vercel)** | https://mobile-rose-psi.vercel.app | Tự động điều chỉnh giao diện Mobile & Desktop |
+| **Backend REST API & Swagger (Render)** | https://shopfit-api.onrender.com/docs | Kết nối Supabase PostgreSQL & Cloudfly S3 |
+| **Gói cài đặt Android Native (APK)** | `artifacts/ShopFit-preview.apk` | Build bằng `scripts/build-android.ps1` (SDK 57 + Hermes) |
 
-Các nút đăng nhập nhanh chỉ xuất hiện khi backend bật `SEED_DEMO=true`. Nếu đổi mật khẩu seed trước lần chạy đầu, dùng form đăng nhập với mật khẩu mới. Seed không ghi đè mật khẩu tài khoản đã tồn tại. Không triển khai công khai với tài khoản mẫu: tắt seed và thay/xóa các tài khoản mẫu đã có.
+### Tài khoản Demo phục vụ chấm thi & bảo vệ
 
-## Kiểm tra
+| Vai trò | Tài khoản đăng nhập | Mật khẩu | Dữ liệu chuẩn bị sẵn |
+| --- | --- | --- | --- |
+| **Chủ Shop (Admin)** | `chushop` | `123` | Quản trị sản phẩm 3 góc ảnh, ma trận tồn kho màu/size, duyệt đơn 1 chạm, duyệt nạp lượt VietQR, thống kê `Try-to-Buy` |
+| **Khách hàng (Customer)** | `khachhang@shopfit.vn` | `123456` | Đã có sẵn **Hồ sơ cơ thể** (`160cm · 50kg · 84-66-90`), **Tủ đồ tham chiếu** và lịch sử đơn hoàn tất để demo tư vấn size ngay |
 
-Từ thư mục gốc:
+> Khuyến khích hội đồng tự đăng ký tài khoản mới trên ứng dụng (có kiểm tra điều khoản dịch vụ, tặng ngay **3 lượt thử AI miễn phí** và hỗ trợ khôi phục mật khẩu bằng OTP 6 số).
 
-```powershell
-npm.cmd run typecheck
-npm.cmd run lint
-npm.cmd run test:api
-npm.cmd run test:e2e
+---
+
+## 2. Kiến trúc Hệ thống
+
+```mermaid
+flowchart LR
+  subgraph Client["Ứng dụng Di động & Web (Expo SDK 57 / React Native 0.86)"]
+    UI["Expo Router · Atelier Editorial UI"]
+    Native["Camera · ImageManipulator · Haptics\nSecureStore · AsyncStorage Offline Cache\nFullscreen 2x Lightbox · Push · AdMob"]
+  end
+
+  subgraph Backend["Backend API (FastAPI · Python 3.12 trên Render)"]
+    Auth["Auth · RBAC · OTP · VIP Tier & Voucher"]
+    Sizing["Engine Tư vấn Size Deterministic\n(FitMap 3 vùng + Tủ đồ tham chiếu)"]
+    Worker["Queue Bất đồng bộ 4 góc nhìn\nIdempotency Key + Budget Ledger"]
+  end
+
+  subgraph Cloud["Hạ tầng Đám mây & AI"]
+    DB[("Supabase PostgreSQL\n(SQLite fallback khi chạy local)")]
+    S3[("Cloudfly S3 Object Storage\n(Lưu ảnh sản phẩm & kết quả AI)")]
+    AI["Google Gemini / OpenVTO\n(Kiểm duyệt Vision + Sinh ảnh 4 góc)"]
+  end
+
+  UI --> Native
+  UI <-->|"HTTPS JSON / Multipart\n+ X-Idempotency-Key"| Backend
+  Backend <--> DB
+  Backend <--> S3
+  Worker <--> AI
 ```
 
-Kiểm thử UI dùng Chromium/Edge headless, khởi động API và Expo nếu chưa chạy. Nếu máy không có Edge, cài browser cho Playwright bằng `npx.cmd --prefix mobile playwright install chromium` hoặc chạy `npx.cmd playwright install chromium` trong `mobile`.
+---
 
-Kiểm thử API thường dùng SQLite tạm và ảnh do test tạo, không dùng database trong `.env`. Kiểm thử PostgreSQL riêng dùng `TEST_DATABASE_URL` và schema tạm, xem [docs/SUPABASE.md](docs/SUPABASE.md). Lời gọi Google được thay thế tại ranh giới dịch vụ; **không tiêu tốn Gemini API**. Kiểm thử UI đăng ký một tài khoản test, tạo rồi hủy một đơn; nếu chạy với API đang mở thì các bản ghi test đó vẫn lưu trong database phát triển.
+## 3. Điểm nhấn Kỹ thuật & Tính năng Nổi bật
 
-Kiểm tra bundle Android, không cần Android SDK:
+### A. Năng lực Ứng dụng Di động Bản địa (Native Mobile Capabilities)
+- **Camera & Tối ưu ảnh đầu vào (`expo-image-picker` + `expo-image-manipulator`):** Chụp ảnh toàn thân trực tiếp hoặc chọn từ thư viện, tự động nén và chuẩn hóa chiều dài tối đa `1600px` ngay trên thiết bị giúp tải lên nhanh qua 4G.
+- **Chế độ Ngoại tuyến & Bộ nhớ đệm (`AsyncStorage` Offline Mode):** Tự động lưu đệm danh mục sản phẩm, bảng số đo, giỏ hàng và danh sách yêu thích. Khi bật **Chế độ máy bay (Airplane Mode)**, ứng dụng vẫn mở mượt mà kèm thanh trạng thái ngoại tuyến và nút kết nối lại 1 chạm.
+- **Trình xem ảnh Toàn màn hình & Phóng đại 2x (`ImageLightbox`):** Chạm vào ảnh sản phẩm (Trước / Sau / Cận chất vải) hoặc ảnh kết quả thử đồ AI 4 góc để mở chế độ toàn màn hình, kéo soi chi tiết đường may ở mức `2x` và chia sẻ nhanh (`Share` / `expo-clipboard`).
+- **Phản hồi xúc giác (`expo-haptics`) & Trải nghiệm di động:** Rung phản hồi tinh tế khi chọn màu/size, lưu yêu thích, thêm giỏ hàng, lưu số đo và đặt đơn thành công; hỗ trợ `Pull-to-Refresh`, `KeyboardAvoidingView`, `SafeAreaView` và vùng chạm chuẩn `>= 48dp`.
+- **Bảo mật phiên & Quyền riêng tư (`expo-secure-store`):** Lưu token phiên đăng nhập mã hóa trên Android/iOS, tự động xử lý hết hạn phiên (`401`), hỗ trợ xóa vĩnh viễn tài khoản theo chuẩn quyền riêng tư trên kho ứng dụng (ẩn danh hóa hóa đơn cũ không gây lỗi khóa ngoại).
+- **Tích hợp Google AdMob chuẩn học phần (`react-native-google-mobile-ads`):** Bản APK Android tích hợp Adaptive Test Banner chính thức của Google ở cuối trang bộ sưu tập, tự động ẩn trên phiên bản Web thương mại (chi tiết tại [ADMOB.md](file:///e:/ckimobile/docs/ADMOB.md)).
 
+### B. Phòng thử đồ ảo AI 4 góc nhìn & Tư vấn Size thông minh
+1. **Kiểm tra ảnh đầu vào bằng AI Vision (`/api/photo-check`):** Xác nhận ảnh rõ nét, đứng thẳng toàn thân trước khi trừ hạn mức tạo ảnh.
+2. **Sinh đồng bộ 4 góc nhìn (`Trước · Trái · Sau · Phải`):** Tận dụng ảnh mặt sau thực tế (`back_image_url`) do chủ shop tải lên để tái tạo đúng lưng áo/đầm thay vì đoán mù; kiểm tra hậu kỳ trang phục & giày giữa các góc, có cơ chế `Retry` riêng góc lỗi và nút báo cáo nội dung AI.
+3. **Bản đồ độ vừa có giải thích (`Atelier Silhouette FitMap`):** Đối chiếu trực quan 3 vùng **Ngực · Eo · Mông** giữa cơ thể người mặc và thông số thành phẩm kèm độ dư chuẩn (`ease`), thước đo `Fit Gauge` 5 nấc và cảnh báo khi có vùng bị chật dù tổng điểm lệch thấp.
+4. **Chọn nhanh vóc dáng 1 chạm & Tủ đồ tham chiếu (`/api/wardrobe`):** Cho phép chọn khung vóc dáng chuẩn Nam/Nữ (`S, M, L, XL`) không cần thước dây, hoặc đối chiếu trực tiếp từng cm với món đồ sẵn có ở nhà.
+5. **Phản hồi Size từ Đơn đã giao (`/api/products/{id}/fit-feedback`):** Chỉ khách đã nhận hàng hoàn tất mới được gửi đánh giá `Chật / Vừa / Rộng`. Hỗ trợ tùy chọn chia sẻ nhận xét ẩn danh (`N*** A***`) giúp khách sau chọn size mà vẫn bảo vệ danh tính.
+
+### C. Thương mại Điện tử, VIP Loyalty & Quản trị Chủ Shop
+- **Giỏ hàng & Thanh toán chống tạo trùng (`X-Idempotency-Key`):** Đồng bộ giá & tồn kho theo thời gian thực, tự động tính chiết khấu hạng thành viên VIP (`Đồng · Bạc 5% · Vàng 10% · Kim Cương 15%` dựa trên đơn hoàn tất) và áp dụng mã giảm giá (`Voucher`).
+- **Nạp lượt thử VietQR an toàn:** Sinh mã QR chuyển khoản tự động; tách biệt bước khách báo đã chuyển (`verifying`) với bước xác thực Webhook có chữ ký bí mật hoặc Chủ shop duyệt 1 chạm trên trang quản trị.
+- **Trung tâm Quản trị Chủ shop (`/admin` & `/orders`):** Đăng/sửa toàn diện sản phẩm (3 góc ảnh, bảng 11 màu chuẩn, ma trận tồn kho từng size, bảng thông số thành phẩm thực tế), lọc nhanh mã sắp hết hàng (`<= 3`), duyệt đơn theo 5 tab trạng thái và xem thống kê **AI Retail Analytics (`Try-to-Buy Conversion Rate`)**.
+
+---
+
+## 4. Hướng dẫn Cài đặt & Chạy Dự án Cục bộ (Local)
+
+### Yêu cầu môi trường
+- **Node.js** `>= 20` (khuyến nghị Node 22 LTS)
+- **Python** `>= 3.11` (khuyến nghị Python 3.12)
+- *(Tùy chọn build APK)* **JDK 17** và **Android SDK** (`ANDROID_HOME`)
+
+### Bước 1: Cài đặt thư viện
 ```powershell
-npm.cmd --prefix mobile run export:android
+npm.cmd install
+npm.cmd --prefix mobile install
+python -m venv backend\.venv
+.\backend\.venv\Scripts\pip install -r backend\requirements.txt
 ```
 
-Đây là kiểm tra bundle JavaScript; chưa thay thế việc build APK và kiểm tra trên thiết bị Android/iOS thật.
+### Bước 2: Cấu hình biến môi trường (Tùy chọn)
+Sao chép `backend/.env.example` sang `backend/.env` nếu muốn gắn khóa `GEMINI_API_KEY` riêng để sinh ảnh AI thật ở máy local (mặc định hệ thống tự khởi tạo SQLite tại `backend/data/shopfit.db` cùng dữ liệu mẫu khi chạy offline).
 
-## Dữ liệu và giới hạn hiện tại
+### Bước 3: Khởi chạy Backend & Ứng dụng Mobile/Web
+```powershell
+# Terminal 1 — Chạy FastAPI Backend tại http://localhost:8000
+node scripts/api.mjs
 
-- Database chính nằm trên Supabase Singapore; ảnh và bản sao SQLite trước migration vẫn ở `backend/data/`. Sao lưu database và thư mục ảnh riêng. Cấu hình và cách chuyển dữ liệu: [docs/SUPABASE.md](docs/SUPABASE.md).
-- Ảnh sản phẩm mẫu lấy từ Unsplash, đóng gói cục bộ trong `backend/assets/` để demo không phụ thuộc mạng ảnh bên ngoài; một số biến thể dùng chung ảnh minh họa. Khi demo chất lượng AI, tải ảnh sản phẩm riêng, chính diện, đúng màu và rõ họa tiết qua tài khoản shop.
-- Worker chạy trong một tiến trình API, tối đa 2 lượt đồng thời; hàng đợi/trạng thái lưu PostgreSQL trên Supabase (SQLite khi offline). Restart tiếp tục phần chưa gọi và kiểm tra ảnh ứng viên đã lưu. Góc gián đoạn khi gọi tạo ảnh cần người dùng chủ động tạo lại, không tự lặp yêu cầu chưa rõ đã tính phí hay chưa.
-- Tối đa 2 lượt đang xử lý cho một tài khoản; mặc định 30 lượt/ngày tính theo UTC. Xóa ảnh không đặt lại hạn mức.
-- Một lượt đầy đủ gồm 4 lần tạo ảnh, một lần kiểm tra đầu vào (cache 15 phút theo tài khoản + nội dung ảnh) và 4 lần kiểm tra kết quả, gồm cả mặt trước. Retry tính thêm một lượt trong hạn mức ngày. `AI_IMAGE_DAILY_LIMIT`, `AI_VISION_DAILY_LIMIT` và `AI_DAILY_BUDGET_USD` giới hạn request/dự trù, không thay thế hóa đơn hoặc hạn mức đặt ở Google.
-- Xóa lượt thử xóa ảnh gốc, cả bốn ảnh kết quả, ảnh mặc thật và bản lưu số đo của lượt đó; giữ bản ghi tối thiểu phục vụ hạn mức. Xóa hồ sơ cơ thể riêng không xóa các lượt thử cũ.
-- Bảng số đo seed là **minh họa/chưa xác nhận**. Nhập số đo thật qua Quản trị → Bảng số đo & ảnh sau trước khi dùng để kết luận size. Tư vấn chỉ so sánh vòng cơ thể với vòng thành phẩm và độ dư do shop cấu hình, không mô phỏng vải hay suy số đo từ chiều cao/cân nặng.
-- Ảnh AI là xem trước phong cách. Mặt khuất còn do AI suy diễn; AI kiểm tra kết quả cũng có thể sai. Chưa có tập ảnh mặc thật để công bố độ chính xác.
-- Chưa triển khai public. Trước khi phát hành cần HTTPS, bảo vệ đăng nhập trước dò mật khẩu, phục hồi tài khoản, giới hạn request ở reverse proxy, lưu ảnh trên object storage và worker bền vững.
-- `npm audit` hiện báo 8 cảnh báo từ cây dependency Expo SDK 57 (5 high, 3 moderate), gồm công cụ CLI và bộ giải mã URL của router. Đã áp dụng bản vá tương thích bằng `npm audit fix`; không dùng `--force` vì đề xuất đổi major SDK. Cần theo dõi các bản vá upstream trước khi phát hành; không công khai máy chủ Metro phát triển.
+# Terminal 2 — Chạy Expo (nhấn w mở Web, a mở Android, hoặc quét QR bằng Expo Go)
+npm.cmd --prefix mobile run start
+```
 
-Nguồn tham khảo và cách dùng OpenVTO: [docs/REFERENCES.md](docs/REFERENCES.md).
+---
 
-Hướng dẫn demo và đánh giá bốn góc: [docs/FITTING.md](docs/FITTING.md).
+## 5. Kiểm thử Tự động, CI/CD & Đóng gói APK
+
+Dự án được thiết lập **GitHub Actions CI** ([ci.yml](file:///e:/ckimobile/.github/workflows/ci.yml)) tự động kiểm tra toàn bộ Backend & Mobile sau mỗi lần `git push`:
+
+```powershell
+# 1. Kiểm tra kiểu tĩnh TypeScript & ESLint chuẩn React 19 / Expo SDK 57
+npm.cmd --prefix mobile run typecheck
+npm.cmd --prefix mobile run lint
+cd mobile; npx.cmd expo install --check
+
+# 2. Chạy bộ 60 kiểm thử tự động Backend (Auth, Kho, VIP/Voucher, VietQR, Sizing, Try-On 4 góc, Quyền riêng tư)
+cd backend; .\.venv\Scripts\python.exe -m pytest tests -q
+
+# 3. Chuẩn bị dữ liệu mẫu thực tế trên môi trường Demo (Idempotent)
+node scripts/prepare-demo.mjs
+
+# 4. Đóng gói file cài đặt Android APK độc lập (kèm Google Test AdMob Banner)
+powershell -ExecutionPolicy Bypass -File scripts/build-android.ps1
+```
+
+File cài đặt Android sau khi đóng gói nằm tại `artifacts/ShopFit-preview.apk`, có thể cài trực tiếp lên điện thoại Android thật hoặc máy ảo Android Studio (`adb install -r artifacts/ShopFit-preview.apk`).
+
+---
+
+## 6. Tài liệu Kỹ thuật Chi tiết
+
+- [PRODUCT.md](file:///e:/ckimobile/docs/PRODUCT.md) — Định vị sản phẩm, quy tắc nghiệp vụ cốt lõi và kịch bản bảo vệ đồ án 5–7 phút.
+- [FITTING.md](file:///e:/ckimobile/docs/FITTING.md) — Thuật toán tư vấn size deterministic, công thức độ dư (`ease`) và kiến trúc xử lý ảnh 4 góc.
+- [ANDROID.md](file:///e:/ckimobile/docs/ANDROID.md) — Hướng dẫn cấu hình Android SDK, JDK 17 và quy trình đóng gói APK.
+- [ADMOB.md](file:///e:/ckimobile/docs/ADMOB.md) — Thiết kế tích hợp quảng cáo thử nghiệm Google AdMob an toàn trên Android.
+- [VALIDATION.md](file:///e:/ckimobile/docs/VALIDATION.md) — Báo cáo kết quả kiểm thử tự động và giới hạn kỹ thuật minh bạch.

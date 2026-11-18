@@ -1,15 +1,24 @@
 param(
-  [string]$ApiUrl = 'http://10.0.2.2:8000',
-  [string]$Architectures = 'arm64-v8a,x86_64'
+  [string]$ApiUrl = 'https://shopfit-api.onrender.com',
+  [string]$Architectures = 'arm64-v8a,x86_64',
+  [string]$EnableTestAds = '1'
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $mobileRoot = Join-Path $projectRoot 'mobile'
 $artifactsRoot = Join-Path $projectRoot 'artifacts'
-if (-not $env:JAVA_HOME -or -not (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME 'bin\java.exe'))) { throw 'Set JAVA_HOME to a compatible JDK (Android Studio JBR or JDK 17+).' }
+if (-not $env:JAVA_HOME -or -not (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME 'bin\java.exe'))) {
+  $bundledJdk = 'E:\Android\Gradle\jdks\eclipse_adoptium-17-amd64-windows.2'
+  if (Test-Path -LiteralPath (Join-Path $bundledJdk 'bin\java.exe')) {
+    $env:JAVA_HOME = $bundledJdk
+  } else {
+    throw 'Set JAVA_HOME to a compatible JDK (JDK 17).'
+  }
+}
 if (-not $env:ANDROID_HOME -or -not (Test-Path -LiteralPath $env:ANDROID_HOME)) { throw 'Set ANDROID_HOME to your installed Android SDK.' }
-$env:SHOPFIT_PREVIEW = '1'
+$env:SHOPFIT_PREVIEW = if ($ApiUrl.StartsWith('http://')) { '1' } else { '0' }
 $env:EXPO_PUBLIC_API_URL = $ApiUrl
+$env:EXPO_PUBLIC_ENABLE_TEST_ADS = $EnableTestAds
 $env:CI = '1'
 $env:NODE_ENV = 'production'
 $env:CMAKE_BUILD_PARALLEL_LEVEL = '2'
@@ -28,7 +37,7 @@ try {
   $apkTarget = Join-Path $artifactsRoot 'ShopFit-preview.apk'
   Copy-Item -LiteralPath $apkSource -Destination $apkTarget -Force
   $hash = (Get-FileHash -LiteralPath $apkTarget -Algorithm SHA256).Hash
-  @{ api_url=$ApiUrl; architectures=$Architectures; sha256=$hash; built_at_utc=[DateTime]::UtcNow.ToString('o'); signing='development only' } |
+  @{ api_url=$ApiUrl; test_ads=($EnableTestAds -eq '1'); architectures=$Architectures; sha256=$hash; built_at_utc=[DateTime]::UtcNow.ToString('o'); signing='development only' } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $artifactsRoot 'android-build.json') -Encoding UTF8
   Write-Output "APK: $apkTarget"
   Write-Output "SHA256: $hash"

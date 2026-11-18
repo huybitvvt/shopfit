@@ -5,6 +5,7 @@ import { Pressable, Text, View } from 'react-native';
 import { request } from '../api';
 import { measureLabels } from '../components/sizing';
 import { Button, Empty, ErrorMessage, Field, Header, Screen, s } from '../components/ui';
+import { tapSuccess } from '../haptics';
 import { useStore } from '../store';
 import { theme as t } from '../theme';
 import type { BodyProfile } from '../types';
@@ -95,6 +96,7 @@ export default function BodyProfileScreen() {
         fit_preference: preference,
       };
       await request('/api/body-profile', { method: 'PATCH', body: JSON.stringify(payload) });
+      tapSuccess();
       notify(`✓ Đã lưu thành công số đo chuẩn ${presetGender === 'nam' ? 'Nam' : 'Nữ'} size ${preset.label}!`);
     } catch (e) {
       setError((e as Error).message);
@@ -113,7 +115,7 @@ export default function BodyProfileScreen() {
       payload[key] = n;
     }
     setBusy(true); setError(null);
-    try { await request('/api/body-profile', { method: 'PATCH', body: JSON.stringify(payload) }); notify('Đã lưu hồ sơ cơ thể.'); router.back(); }
+    try { await request('/api/body-profile', { method: 'PATCH', body: JSON.stringify(payload) }); tapSuccess(); notify('Đã lưu hồ sơ cơ thể.'); router.back(); }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   async function remove() {

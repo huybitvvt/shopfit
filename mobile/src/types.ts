@@ -50,7 +50,15 @@ export type TryonAnalytics = {
   top_products: TryonTopProduct[];
 };
 export type CartLine = { key: string; product: Product; size: string; color: string; quantity: number };
-export type FitReview = { actual_fit: 'tight' | 'fits' | 'loose'; notes: string; updated_at: string };
+export type FitReview = { actual_fit: 'tight' | 'fits' | 'loose'; notes: string; share_public?: boolean; updated_at: string };
+export type PublicFitReview = {
+  masked_user: string;
+  size: string;
+  color: string;
+  actual_fit: 'tight' | 'fits' | 'loose';
+  notes: string;
+  updated_at: string;
+};
 export type OrderItem = { id: number; product_id: string; name: string; image_url: string; size: string; color: string; quantity: number; price: number; fit_review: FitReview | null };
 export type Order = {
   id: string;
@@ -77,7 +85,7 @@ export type WardrobeItem = { id: string; name: string; category: Product['tryon_
 export type GarmentComparison = { status: string; name: string; material?: string; warning?: string; rows: { size: string; checks: { key: string; label: string; reference_cm: number; garment_cm: number; difference_cm: number }[] }[] };
 export type SizeAdvice = { status: string; recommended_size: string | null; missing: string[]; warnings: string[]; candidates: { size: string; eligible: boolean; score: number; checks: SizeCheck[] }[]; regions: Record<string, SizeCheck[]>; comparison: GarmentComparison | null };
 export type FitFeedbackRow = { product_id: string; size: string; tight: number; fits: number; loose: number; total: number; enough_data: boolean; needs_review: boolean; name?: string };
-export type FitFeedback = { rows: FitFeedbackRow[]; notice: string };
+export type FitFeedback = { rows: FitFeedbackRow[]; reviews?: PublicFitReview[]; notice: string };
 export type FitInsights = FitFeedback & { review_count: number; recent_reviews: (FitReview & { product_id: string; name: string; size: string; color: string })[]; tryons: { total: number; completed: number; partial: number; failed: number; average_ms: number | null }; catalog: { total: number; measured: number } };
 export type AIUsage = { date_utc: string; estimated_usd: number; budget_usd: number; image_limit: number; vision_limit: number; calls: { kind: string; status: string; count: number; estimate: number }[]; notice: string };
 export type Angle = 'front' | 'left' | 'back' | 'right';

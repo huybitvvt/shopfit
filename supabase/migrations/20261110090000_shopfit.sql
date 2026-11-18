@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS password_resets (
 );
 CREATE TABLE IF NOT EXISTS fit_reviews (
     order_item_id INTEGER PRIMARY KEY REFERENCES order_items(id), user_id TEXT NOT NULL REFERENCES users(id),
-    actual_fit TEXT NOT NULL, notes TEXT NOT NULL, updated_at TEXT NOT NULL
+    actual_fit TEXT NOT NULL, notes TEXT NOT NULL, share_public INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ai_calls (
     id TEXT PRIMARY KEY, job_id TEXT, kind TEXT NOT NULL, angle TEXT, status TEXT NOT NULL,
@@ -111,6 +111,7 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_amount INTEGER NOT NULL DEF
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS voucher_code TEXT;
 ALTER TABLE payment_transactions ALTER COLUMN user_id DROP NOT NULL;
 ALTER TABLE tryons ADD COLUMN IF NOT EXISTS quota_source TEXT NOT NULL DEFAULT 'daily';
+ALTER TABLE fit_reviews ADD COLUMN IF NOT EXISTS share_public INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_tryons_product ON tryons(product_id, status);
 

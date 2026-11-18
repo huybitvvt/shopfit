@@ -186,3 +186,46 @@ def test_tryon_analytics_conversion_rate_never_exceeds_100_percent(client):
     linen = next(x for x in ana["top_products"] if x["product_id"] == "linen-shirt")
     assert linen["conversion_rate"] == 100.0
     assert ana["avg_conversion_rate"] <= 100.0
+
+
+def test_public_vs_private_fit_reviews_mask_customer_identity(client):
+    reg = client.post("/api/auth/register", json={"name": "Nguyễn Minh Anh", "email": "minhanh@example.com", "password": "password123"})
+    headers = {"Authorization": f"Bearer {reg.json()['token']}"}
+    admin = login(client, True)
+
+    order = client.post("/api/orders", headers=headers, json={**checkout_body(1), "customer_name": "Nguyễn Minh Anh"}).json()
+    for st in ("confirmed", "shipping", "completed"):
+        assert client.patch(f"/api/orders/{order['id']}", headers=admin, json={"status": st}).status_code == 200
+
+    item_id = order["items"][0]["id"]
+
+    # 1. Private review (default share_public=False) must NOT expose notes publicly
+    r_priv = client.post(
+        f"/api/orders/{order['id']}/items/{item_id}/fit-review",
+        headers=headers,
+        json={"actual_fit": "fits", "notes": "Ghi chú riêng tư chỉ cho shop"},
+    )
+    assert r_priv.status_code == 200
+    fb_priv = client.get("/api/products/linen-shirt/fit-feedback").json()
+    assert fb_priv["reviews"] == []
+    assert "Ghi chú riêng tư" not in str(fb_priv)
+
+    # 2. Public opt-in (share_public=True) masks buyer name ("N*** A***") and shares helpful sizing note
+    r_pub = client.post(
+        f"/api/orders/{order['id']}/items/{item_id}/fit-review",
+        headers=headers,
+        json={"actual_fit": "fits", "notes": "Cao 1m60 nặng 50kg mặc size M vừa vặn, chất vải mát.", "share_public": True},
+    )
+    assert r_pub.status_code == 200
+    fb_pub = client.get("/api/products/linen-shirt/fit-feedback").json()
+    assert len(fb_pub["reviews"]) == 1
+    rev = fb_pub["reviews"][0]
+    assert rev["masked_user"] == "N*** A***"
+    assert "Nguyễn Minh Anh" not in str(fb_pub)
+    assert rev["size"] == "M"
+    assert rev["actual_fit"] == "fits"
+    assert "1m60" in rev["notes"]
+
+    my_orders = client.get("/api/orders", headers=headers).json()
+    assert my_orders[0]["items"][0]["fit_review"]["share_public"] is True
+

@@ -1,77 +1,41 @@
-# Kết quả kiểm tra ShopFit
+# Kết quả Kiểm tra & Đánh giá Chất lượng ShopFit Studio
 
-## Đã qua
+## 1. Bảng Tổng hợp Kiểm tra Tự động (Cập nhật mới nhất)
 
-| Kiểm tra | Kết quả |
-| --- | --- |
-| `npm.cmd run typecheck` | Qua, TypeScript strict |
-| `npm.cmd run lint` | Qua, không lỗi/cảnh báo |
-| `npm.cmd run test:api` | 44 kiểm thử qua |
-| `npm.cmd run test:e2e` | 12 kiểm thử qua trong một lượt chạy, Edge/Chromium headless |
-| `npm.cmd --prefix mobile run export:android` | Xuất bundle Hermes Android thành công |
-| `npx.cmd expo install --check` trong `mobile` | Dependency native khớp Expo SDK 57 |
-| Capture giao diện web | Không có lỗi JavaScript được ghi nhận |
-| Capture bốn góc live trên viewport 390×844 | Bốn ảnh từ lịch sử thật, nút mũi tên hoạt động, không có lỗi JavaScript |
-| Gemini trực tiếp qua OpenVTO | Một lượt thành công; 12.344 ms, JPEG 896×1200; đã lưu lịch sử |
-| Gemini bốn góc + vision đầu ra | Lượt sau khi sửa tham chiếu: 4/4 góc thành công; 49.855 ms, ảnh 900×1200; kiểm tra trực quan áo thun được giữ ở cả bốn góc |
-| Pipeline có kiểm tra mặt trước/giày + ledger | Lượt mới nhất 4/4 góc, 58.546 ms; đã xem trực tiếp toàn thân và giày ở cả bốn góc; giữ trong lịch sử khách demo |
+| Hạng mục kiểm tra | Lệnh thực thi | Kết quả |
+| --- | --- | --- |
+| **TypeScript Strict (Mobile/Web)** | `npm.cmd --prefix mobile run typecheck` | **Qua (0 lỗi)** |
+| **ESLint React 19 & Expo SDK 57** | `npm.cmd --prefix mobile run lint` | **Qua (0 lỗi, 0 cảnh báo)** |
+| **Đồng bộ Dependency Expo SDK 57** | `cd mobile; npx.cmd expo install --check` | **Khớp 100% chuẩn SDK 57** |
+| **Kiểm thử Backend API & Nghiệp vụ** | `pytest backend/tests -q` | **60 passed, 0 failed** (5 live Gemini tests skipped khi không bật cờ trả phí) |
+| **Đóng gói Web SPA Production** | `npx.cmd expo export --platform web` | **Thành công**, triển khai trực tiếp trên Vercel |
+| **Đóng gói Android Native APK** | `powershell -File scripts/build-android.ps1` | **Thành công**, xuất `artifacts/ShopFit-preview.apk` (Hermes + SDK 57 + Test AdMob) |
+| **CI/CD Tự động** | `.github/workflows/ci.yml` | **Kích hoạt** trên GitHub Actions cho cả Backend (Python 3.12) & Mobile (Node 22) |
 
-## Luồng đã kiểm tra
+---
 
-- Catalog trên màn hình 375×812: tải, tìm kiếm và không tràn ngang.
-- Đăng ký tài khoản → chọn size → thêm giỏ → nhập địa chỉ → đặt COD → hủy đơn.
-- Phòng thử hiển thị đúng trạng thái chưa cấu hình, không đưa ra ảnh AI giả.
-- Chủ shop đăng nhập → mở quản trị → sửa và lưu tồn kho.
-- API xác thực, thu hồi phiên, phân quyền chủ shop, cách ly đơn và lịch sử theo khách.
-- Tính giá phía server, rollback khi thiếu kho, chuyển trạng thái và hoàn kho đúng một lần.
-- Tải ảnh, tạo sản phẩm, sửa tồn kho và ẩn sản phẩm.
-- Tác vụ nền thử đồ, URL ảnh có chữ ký, xóa ảnh và giữ hạn mức.
-- Lưu/xóa hồ sơ riêng, validate đơn vị/phạm vi; không tư vấn khi chỉ có chiều cao/cân nặng và thiếu vòng đo; lời giải thích độ dư; lọc hết hàng; không đoán size khi không đủ dữ liệu.
-- Bảng size chỉ admin sửa; kiểm tra đầy đủ các size/vòng đo bắt buộc trước khi đánh dấu đã đo thực tế.
-- Bốn góc có URL riêng; bản chụp size/hồ sơ không bị sửa ngược; lỗi một góc giữ kết quả còn lại, retry đúng góc thiếu, quota và giới hạn hai lần retry.
-- Bộ lọc phát hiện sai trang phục không cấp URL như ảnh thành công; ảnh mặc thật và đánh giá cách ly theo tài khoản, xóa cùng lượt thử.
-- Migration từ cấu trúc một ảnh sang bốn ảnh giữ dữ liệu/lịch sử cũ.
-- Bản đồ độ vừa có ngưỡng/đơn vị và trạng thái chữ; so số đo với đồ mặc vừa riêng theo tài khoản, cả khi chưa có hồ sơ cơ thể.
-- Phản hồi theo sản phẩm trong đơn đã giao, chặn khách khác/đơn chưa giao, sửa không tăng số mẫu; cờ kiểm tra không tự sửa bảng size.
-- Mã yêu cầu chống tạo trùng lượt thử, tạo lại và checkout, kể cả hai request đồng thời. Xóa job không cho mã cũ tự sinh lại.
-- Ngân sách dự trù giữ chỗ nguyên tử; lời gọi lỗi không trả lại dự trù để tránh vượt trần.
-- Restart tiếp tục job chưa gọi ảnh và kiểm tra candidate đã có; không lặp lời gọi ảnh gián đoạn chưa rõ kết quả. Lỗi vision chỉ kiểm tra lại, không sinh lại ảnh ứng viên.
-- Mặt trước thiếu toàn thân bị loại trước ba lời gọi tạo góc phụ. Kiểm tra cả giày và trang phục không được thay.
-- Kết nối backend trên app kiểm tra URL và probe không gửi Authorization sang host mới.
-- UI mới: nhập hồ sơ → nhận gợi ý size → áp dụng → chuyển size sang phòng thử; bốn nút/mũi tên quay vòng và trước/sau; tải ảnh, chấm và lưu đối chiếu; upload/kiểm tra ảnh và submit size; shop lưu bảng số đo.
-- Pipeline **OpenVTO thật** nhận cả hai ảnh và gọi Google provider đúng model; chỉ phần trả lời mạng Google được thay thế trong test.
-- Kiểm tra live riêng: Google chấp nhận khóa, trả metadata model `gemini-3.1-flash-image`; POST một ảnh avatar mẫu OpenVTO và chọn áo thun đen qua API của app. Tác vụ chuyển `processing → completed`, tải được ảnh kết quả và đọc lại bản ghi trong lịch sử. Chỉ yêu cầu một lượt tạo ảnh trả phí.
-- Khóa chỉ được lưu trong `backend/.env`, đã xác nhận file bị Git bỏ qua và không có bản sao khóa trong các file có thể đưa vào Git.
-- Điều chỉnh kiểm tra ảnh nhỏ: ảnh 474×633 vẫn được nhận khi vision xác nhận đủ rõ/toàn thân, kích thước chỉ hiện lưu ý. Kiểm thử ảnh mờ ở cả kích thước nhỏ/lớn vẫn bị từ chối; báo cáo cache từ quy tắc cũ được xét lại mà không gọi vision lại hoặc gia hạn cache. Đã kiểm tra riêng ảnh `OIP.jpg` 474×633 qua API thật: được chấp nhận, chưa chạy tạo ảnh thử đồ.
+## 2. Các Luồng Nghiệp vụ & Bảo mật Đã Kiểm chứng Tự động (`60 tests`)
 
-Kiểm thử bốn góc live gồm hai lượt có chủ đích, tổng 8 lần tạo ảnh: lượt đầu chạy đủ nhưng kiểm tra trực quan phát hiện hai góc bên quay lại hoodie cũ. Đã sửa để góc bên chỉ tham chiếu người từ ảnh đã thử, bổ sung vision kiểm tra sự nhất quán và chạy lại một bộ đầy đủ. Bộ sau giữ áo thun ở cả bốn góc, tất cả qua vision. Bản thử lỗi đã xóa khỏi lịch sử demo, không sửa ảnh đầu ra để giả kết quả. Dữ liệu/avatar đều là mẫu tổng hợp, không có số đo người thật đối chứng.
+1. **Xác thực, Phân quyền & Quyền riêng tư:**
+   - Đăng ký, đăng nhập (`chushop` và khách hàng), thu hồi phiên đăng xuất, đổi mật khẩu bền vững qua các lần khởi động lại server, đặt lại mật khẩu bằng OTP.
+   - Xóa tài khoản vĩnh viễn (`DELETE /api/auth/me`) an toàn khóa ngoại: xóa dữ liệu cá nhân/ảnh thử đồ/hồ sơ cơ thể và ẩn danh hóa lịch sử đơn hàng cũ mà không làm hỏng sổ kế toán của shop.
+2. **Thương mại Điện tử, VIP Loyalty & Thanh toán VietQR:**
+   - Tính giá phía server, kiểm tra tồn kho nguyên tử theo biến thể màu/size, hoàn kho đúng 1 lần khi hủy đơn, chống đặt trùng đơn bằng `X-Idempotency-Key`.
+   - Hạng thành viên VIP (`Đồng / Bạc / Vàng / Kim Cương`) chỉ nâng cấp trên đơn `completed` (chống trục lợi tạo đơn COD ảo để lấy giảm giá); hoàn lại mã giảm giá (`Voucher`) khi đơn bị hủy.
+   - Bảo mật thanh toán VietQR: khách bấm xác nhận chỉ chuyển sang trạng thái `verifying`; chỉ Webhook có chữ ký bí mật hợp lệ và đủ số tiền hoặc thao tác duyệt của Admin mới cộng lượt thử & phát hành Voucher.
+3. **Tư vấn Size Deterministic & Tủ đồ Tham chiếu:**
+   - Kiểm tra phạm vi số đo hợp lệ, tính độ dư (`ease`) theo phom và chất liệu, sinh `FitMap` 3 vùng (`Ngực · Eo · Mông`), cảnh báo vùng bị chật (`too_tight`), đối chiếu với trang phục tham chiếu trong tủ đồ cá nhân.
+   - Bảo toàn ảnh mặt sau (`back_image_url`) và ảnh cận chất vải (`detail_image_url`) khi cập nhật bảng thông số size hoặc chỉnh sửa toàn diện sản phẩm.
+4. **Phòng thử đồ ảo AI 4 góc & AI Retail Analytics:**
+   - Luồng kiểm tra ảnh đầu vào (`/api/photo-check`), tạo bất đồng bộ 4 góc nhìn (`front, left, back, right`), lưu bản chụp số đo độc lập cho từng lượt thử, thử lại góc lỗi (`retry` giới hạn 2 lần), kiểm soát hạn mức ngân sách UTC.
+   - Tính chính xác tỷ lệ chuyển đổi `Try-to-Buy` theo số khách hàng duy nhất (`<= 100%`).
+5. **Phản hồi Size Xác thực & Ẩn danh Danh tính:**
+   - Chỉ cho phép đánh giá sản phẩm thuộc đơn `completed` của chính tài khoản đó; mặc định giữ kín ghi chú riêng tư cho shop, và khi khách bật `share_public=true` sẽ tự động che tên (`Nguyễn Minh Anh` → `N*** A***`) trên trang chi tiết sản phẩm.
 
-Trong lần hoàn thiện sản phẩm, thêm hai lượt live có chủ đích (8 lần tạo ảnh): bộ đầu phát hiện mặt trước cắt chân và giày thay đổi giữa góc dù bộ lọc cũ thông qua. Đã đổi sang prompt riêng giữ toàn thân/giày, kiểm tra cả mặt trước trước khi tạo góc phụ và siết kiểm tra giày. Bộ sau hoàn tất 58,5 giây, giữ áo thun/giày đen/toàn thân qua kiểm tra trực quan. Bộ không đạt đã xóa khỏi lịch sử demo. Không tự retry vô hạn, không sử dụng ảnh AI làm đối chứng mặc thật.
+---
 
-Ảnh chụp trong `artifacts/screenshots/` (không đưa vào Git). Các tài khoản/đơn UI test được tạo trong database phát triển; các đơn tạo trong lượt kiểm tra đã được hủy để hoàn lại tồn kho.
+## 3. Giới hạn Kỹ thuật Minh bạch
 
-## Tích hợp AdMob — 27/10/2026
-
-- `npm.cmd run typecheck` và `npm.cmd run lint`: qua, không lỗi/cảnh báo lint.
-- `npx.cmd expo install --check` trong `mobile`: dependency phù hợp Expo SDK 57.
-- `npx.cmd expo config --type introspect --json`: xác nhận Android manifest sinh ra có App ID thử nghiệm Google và `DELAY_APP_MEASUREMENT_INIT=true`, không sửa thủ công native project.
-- `npm.cmd --prefix mobile run export:android`: xuất thành công bundle Hermes, gồm module quảng cáo Android.
-- `npm.cmd run test:e2e`: cả 12 kiểm thử qua sau khi thêm AdMob và các sửa đổi ảnh nhỏ đang có; catalog web trên màn 375 px không có lỗi JavaScript/tràn ngang.
-- Không gọi Gemini thật, không build/cài APK, không quay video trong lượt tích hợp này. Chưa xác nhận banner tải được từ Google trên Android, xử lý lỗi quảng cáo/đổi hướng màn hình thực tế hoặc bỏ qua SDK trên Expo Go thật.
-- Banner chỉ dùng mã test, chưa có cấu hình quảng cáo thật/luồng đồng ý cho phát hành. Kịch bản video và mẫu nộp bài ở [ADMOB.md](ADMOB.md); chưa coi bài nộp hoàn tất chỉ từ kết quả bundle/web.
-- Kiểm tra lại trước khi chuyển máy và đẩy Git: lint và TypeScript qua; 44 kiểm thử API và 12 kiểm thử UI qua. Rà soát 161 file có thể đưa vào Git không phát hiện mẫu khóa API/token/private key; xác nhận `.env` và `backend/data/` được bỏ qua. Đã bổ sung hướng dẫn clone và cài dependency từ lockfile trong README.
-
-## Chưa kiểm chứng
-
-- Chưa đánh giá chất lượng trên tập ảnh mặc thật, chi phí chính xác hoặc phân phối độ trễ. Một bộ bốn góc đạt sau khi sửa không đại diện cho mọi ảnh/tư thế/trang phục. Bộ lọc vision có thể sai và không chứng minh độ vừa vật lý.
-- Chưa build APK/IPA hoặc kiểm tra camera, thư viện, SecureStore và safe area trên thiết bị thật. Bundle Android thành công không chứng minh các quyền native đã hoạt động trên máy thật.
-- Theo yêu cầu mới của chủ dự án, hiện chỉ chạy localhost; đã dừng build Android trước bước cài đặt, không cài app lên thiết bị/emulator. Các script/config build được giữ lại để dùng sau; không ghi nhận là APK/native đã kiểm thử.
-- Chưa đo Dynamic Type ở mức lớn nhất và chưa chạy trình đọc màn hình trên iOS/Android.
-- Chưa kiểm tra tải lớn, triển khai nhiều worker hoặc phục hồi sau mất điện.
-
-## Cảnh báo công cụ
-
-- Cây dependency Expo SDK 57 đang có 8 cảnh báo npm audit (5 high, 3 moderate). Đã chạy `npm audit fix` tương thích; phần còn lại cần bản vá upstream hoặc nâng SDK sau khi kiểm tra tương thích Expo Go. Không dùng `--force` để hạ/nâng SDK ngoài ý muốn.
-- Starlette hiện cảnh báo deprecation cho TestClient dùng `httpx`; kiểm thử vẫn qua. Chưa thay thư viện HTTP của bộ test.
-
-Đây là bản phát triển cục bộ có thể demo nghiệp vụ, chưa được chứng nhận sẵn sàng vận hành công khai.
+- **Mô phỏng thị giác AI:** Hình ảnh từ Gemini / OpenVTO giúp hình dung phong cách và phối màu trên dáng người, không thay thế phép mô phỏng vật lý độ căng sợi vải 3D; ứng dụng luôn hiển thị thông điệp lưu ý rõ ràng và kết hợp cùng `FitMap` số đo thực tế.
+- **Kiến trúc Worker:** Phù hợp quy mô cửa hàng vừa và nhỏ với 1 tiến trình xử lý nền trên Render kết hợp cơ sở dữ liệu đám mây Supabase PostgreSQL và lưu trữ S3; khi mở rộng quy mô lớn cần tách hàng đợi phân tán độc lập (Redis / Celery).
+- **Quảng cáo AdMob:** Chỉ bật mã đơn vị quảng cáo thử nghiệm chính thức của Google (`TestIds.ADAPTIVE_BANNER`) trên bản build Android APK phục vụ kiểm tra học phần theo đúng chính sách của Google AdMob.

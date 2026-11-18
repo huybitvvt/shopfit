@@ -7,13 +7,12 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $mobileRoot = Join-Path $projectRoot 'mobile'
 $artifactsRoot = Join-Path $projectRoot 'artifacts'
+$bundledJdk = 'E:\Android\Gradle\jdks\eclipse_adoptium-17-amd64-windows.2'
+if ((-not $env:JAVA_HOME -or $env:JAVA_HOME -match 'Android Studio[\\/]jbr' -or -not (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME 'bin\java.exe'))) -and (Test-Path -LiteralPath (Join-Path $bundledJdk 'bin\java.exe'))) {
+  $env:JAVA_HOME = $bundledJdk
+}
 if (-not $env:JAVA_HOME -or -not (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME 'bin\java.exe'))) {
-  $bundledJdk = 'E:\Android\Gradle\jdks\eclipse_adoptium-17-amd64-windows.2'
-  if (Test-Path -LiteralPath (Join-Path $bundledJdk 'bin\java.exe')) {
-    $env:JAVA_HOME = $bundledJdk
-  } else {
-    throw 'Set JAVA_HOME to a compatible JDK (JDK 17).'
-  }
+  throw 'Set JAVA_HOME to a compatible JDK (JDK 17).'
 }
 if (-not $env:ANDROID_HOME -or -not (Test-Path -LiteralPath $env:ANDROID_HOME)) { throw 'Set ANDROID_HOME to your installed Android SDK.' }
 $env:SHOPFIT_PREVIEW = if ($ApiUrl.StartsWith('http://')) { '1' } else { '0' }
@@ -29,7 +28,7 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Expo prebuild failed.' }
   Push-Location -LiteralPath (Join-Path $mobileRoot 'android')
   try {
-    & .\gradlew.bat :app:assembleRelease "-PreactNativeArchitectures=$Architectures" --max-workers=1 '-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m' '-Pkotlin.compiler.execution.strategy=in-process' '-Dorg.gradle.parallel=false' --console=plain
+    & .\gradlew.bat :app:assembleRelease "-Dorg.gradle.java.home=$env:JAVA_HOME" "-PreactNativeArchitectures=$Architectures" --max-workers=1 '-Dorg.gradle.jvmargs=-Xmx1536m -XX:MaxMetaspaceSize=512m' '-Pkotlin.compiler.execution.strategy=in-process' '-Dorg.gradle.parallel=false' --console=plain
     if ($LASTEXITCODE -ne 0) { throw 'Gradle build failed.' }
   } finally { Pop-Location }
   $apkSource = Join-Path $mobileRoot 'android\app\build\outputs\apk\release\app-release.apk'

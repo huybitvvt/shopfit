@@ -7,14 +7,14 @@
 | **TypeScript Strict (Mobile/Web)** | `npm.cmd --prefix mobile run typecheck` | **Qua (0 lỗi)** |
 | **ESLint React 19 & Expo SDK 57** | `npm.cmd --prefix mobile run lint` | **Qua (0 lỗi, 0 cảnh báo)** |
 | **Đồng bộ Dependency Expo SDK 57** | `cd mobile; npx.cmd expo install --check` | **Khớp 100% chuẩn SDK 57** |
-| **Kiểm thử Backend API & Nghiệp vụ** | `pytest backend/tests -q` | **60 passed, 0 failed** (5 live Gemini tests skipped khi không bật cờ trả phí) |
+| **Kiểm thử Backend API & Nghiệp vụ** | `pytest backend/tests -q` | **62 passed, 0 failed** (5 live Gemini tests skipped khi không bật cờ trả phí) |
 | **Đóng gói Web SPA Production** | `npx.cmd expo export --platform web` | **Thành công**, triển khai trực tiếp trên Vercel |
 | **Đóng gói Android Native APK** | `powershell -File scripts/build-android.ps1` | **Thành công**, xuất `artifacts/ShopFit-preview.apk` (Hermes + SDK 57 + Test AdMob) |
 | **CI/CD Tự động** | `.github/workflows/ci.yml` | **Kích hoạt** trên GitHub Actions cho cả Backend (Python 3.12) & Mobile (Node 22) |
 
 ---
 
-## 2. Các Luồng Nghiệp vụ & Bảo mật Đã Kiểm chứng Tự động (`60 tests`)
+## 2. Các Luồng Nghiệp vụ & Bảo mật Đã Kiểm chứng Tự động (`62 tests`)
 
 1. **Xác thực, Phân quyền & Quyền riêng tư:**
    - Đăng ký, đăng nhập (`chushop` và khách hàng), thu hồi phiên đăng xuất, đổi mật khẩu bền vững qua các lần khởi động lại server, đặt lại mật khẩu bằng OTP.
@@ -22,7 +22,7 @@
 2. **Thương mại Điện tử, VIP Loyalty & Thanh toán VietQR:**
    - Tính giá phía server, kiểm tra tồn kho nguyên tử theo biến thể màu/size, hoàn kho đúng 1 lần khi hủy đơn, chống đặt trùng đơn bằng `X-Idempotency-Key`.
    - Hạng thành viên VIP (`Đồng / Bạc / Vàng / Kim Cương`) chỉ nâng cấp trên đơn `completed` (chống trục lợi tạo đơn COD ảo để lấy giảm giá); hoàn lại mã giảm giá (`Voucher`) khi đơn bị hủy.
-   - Bảo mật thanh toán VietQR: khách bấm xác nhận chỉ chuyển sang trạng thái `verifying`; chỉ Webhook có chữ ký bí mật hợp lệ và đủ số tiền hoặc thao tác duyệt của Admin mới cộng lượt thử & phát hành Voucher.
+   - Bảo mật thanh toán **SePay VietQR** cho cả **Nạp lượt AI (`FITxxxxxx`)** và **Đơn hàng TMĐT (`SFxxxxxx`)**: khách bấm báo đã chuyển khoản chỉ chuyển trạng thái `verifying`; Webhook xác thực `Authorization: Apikey`, lọc `transferType=in`, kiểm tra số tài khoản nhận và đủ số tiền, chống xử lý trùng theo `sepay_id` (`sepay_webhooks`) và trả chuẩn `{"success": true}` để tự động cộng lượt / xác nhận đơn hàng.
 3. **Tư vấn Size Deterministic & Tủ đồ Tham chiếu:**
    - Kiểm tra phạm vi số đo hợp lệ, tính độ dư (`ease`) theo phom và chất liệu, sinh `FitMap` 3 vùng (`Ngực · Eo · Mông`), cảnh báo vùng bị chật (`too_tight`), đối chiếu với trang phục tham chiếu trong tủ đồ cá nhân.
    - Bảo toàn ảnh mặt sau (`back_image_url`) và ảnh cận chất vải (`detail_image_url`) khi cập nhật bảng thông số size hoặc chỉnh sửa toàn diện sản phẩm.

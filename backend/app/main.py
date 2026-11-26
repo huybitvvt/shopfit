@@ -133,6 +133,7 @@ class Checkout(BaseModel):
     address: str = Field(min_length=10, max_length=400)
     note: str = Field(default="", max_length=500)
     voucher_code: str | None = Field(default=None, max_length=40)
+    payment_method: Literal["cod", "vietqr"] = "cod"
     items: list[CartItem] = Field(min_length=1, max_length=30)
 
     @field_validator("phone")
@@ -299,7 +300,38 @@ def calculate_tier(total_spent: int) -> str:
     return "bronze"
 
 
-def complete_payment_transaction(conn, trans_row, settings: Settings):
+PAYMENT_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def generate_payment_code(prefix: str) -> str:
+    return prefix + "".join(secrets.choice(PAYMENT_CODE_CHARS) for _ in range(6))
+
+
+def build_sepay_qr_url(settings: Settings, amount: int, description: str) -> str:
+    params = urllib.parse.urlencode({
+        "acc": settings.bank_account,
+        "bank": settings.bank_id,
+        "amount": int(amount),
+        "des": description,
+        "template": settings.sepay_qr_template or "compact",
+    })
+    return f"https://qr.sepay.vn/img?{params}"
+
+
+def normalize_account_number(value: str | None) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def complete_payment_transaction(
+    conn,
+    trans_row,
+    settings: Settings,
+    *,
+    sepay_tx_id: str | None = None,
+    reference_code: str | None = None,
+    gateway: str | None = None,
+    paid_amount: int | None = None,
+):
     if trans_row["status"] == "completed":
         return {"status": "completed", "tryons": trans_row["tryons"]}
 
@@ -309,36 +341,71 @@ def complete_payment_transaction(conn, trans_row, settings: Settings):
     amount = trans_row["amount"]
     package_id = trans_row["package_id"]
 
-    conn.execute("UPDATE payment_transactions SET status='completed', completed_at=? WHERE id=?", (now(), trans_id))
     conn.execute(
-        "UPDATE users SET starter_tryons_left = COALESCE(starter_tryons_left, 0) + ?, total_spent = COALESCE(total_spent, 0) + ? WHERE id=?",
-        (tryons, amount, user_id)
+        """UPDATE payment_transactions
+           SET status='completed',
+               completed_at=?,
+               sepay_tx_id=COALESCE(?, sepay_tx_id),
+               reference_code=COALESCE(?, reference_code),
+               gateway=COALESCE(?, gateway),
+               paid_amount=COALESCE(?, paid_amount)
+           WHERE id=?""",
+        (now(), sepay_tx_id, reference_code, gateway, paid_amount if paid_amount is not None else amount, trans_id),
     )
-
-    u_row = conn.execute("SELECT total_spent, push_token FROM users WHERE id=?", (user_id,)).fetchone()
-    if u_row:
-        new_spent = u_row["total_spent"] or 0
-        new_tier = calculate_tier(new_spent)
-        conn.execute("UPDATE users SET vip_tier=? WHERE id=?", (new_tier, user_id))
-
-        if u_row["push_token"]:
-            send_push_notification(
-                u_row["push_token"],
-                "Nạp lượt thử thành công! 🎉",
-                f"Tài khoản của bạn đã được cộng thêm {tryons} lượt thử đồ AI ShopFit. Bắt đầu phối đồ ngay nhé!",
-                {"type": "payment_completed", "transaction_id": trans_id}
-            )
-
-    pkg = conn.execute("SELECT voucher_value FROM token_packages WHERE id=?", (package_id,)).fetchone()
-    if pkg and pkg["voucher_value"] > 0:
-        v_code = f"FIT{secrets.choice('ABCDEFGHJKLMNPQRSTUVWXYZ')}{secrets.randbelow(9000)+1000}"
+    if user_id:
         conn.execute(
-            """INSERT INTO user_vouchers (id, user_id, code, discount_amount, min_order, used, created_at, expires_at)
-               VALUES (?, ?, ?, ?, 100000, 0, ?, ?)""",
-            (uuid.uuid4().hex, user_id, v_code, pkg["voucher_value"], now(), "2099-12-31T23:59:59")
+            "UPDATE users SET starter_tryons_left = COALESCE(starter_tryons_left, 0) + ?, total_spent = COALESCE(total_spent, 0) + ? WHERE id=?",
+            (tryons, amount, user_id),
         )
 
+        u_row = conn.execute("SELECT total_spent, push_token FROM users WHERE id=?", (user_id,)).fetchone()
+        if u_row:
+            new_spent = u_row["total_spent"] or 0
+            new_tier = calculate_tier(new_spent)
+            conn.execute("UPDATE users SET vip_tier=? WHERE id=?", (new_tier, user_id))
+
+            if u_row["push_token"]:
+                try:
+                    send_push_notification(
+                        u_row["push_token"],
+                        "Nạp lượt thử thành công! 🎉",
+                        f"Tài khoản của bạn đã được cộng thêm {tryons} lượt thử đồ AI ShopFit. Bắt đầu phối đồ ngay nhé!",
+                        {"type": "payment_completed", "transaction_id": trans_id},
+                    )
+                except Exception:
+                    pass
+
+        pkg = conn.execute("SELECT voucher_value FROM token_packages WHERE id=?", (package_id,)).fetchone()
+        if pkg and pkg["voucher_value"] > 0:
+            v_code = f"FIT{secrets.choice('ABCDEFGHJKLMNPQRSTUVWXYZ')}{secrets.randbelow(9000)+1000}"
+            conn.execute(
+                """INSERT INTO user_vouchers (id, user_id, code, discount_amount, min_order, used, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, 100000, 0, ?, ?)""",
+                (uuid.uuid4().hex, user_id, v_code, pkg["voucher_value"], now(), "2099-12-31T23:59:59"),
+            )
+
     return {"status": "completed", "tryons": tryons}
+
+
+def mark_order_paid(conn, order_row, *, sepay_tx_id: str | None = None) -> str | None:
+    order_dict = dict(order_row)
+    if order_dict.get("payment_status") == "paid":
+        return None
+    next_status = "confirmed" if order_dict["status"] == "pending" else order_dict["status"]
+    conn.execute(
+        """UPDATE orders
+           SET payment_status='paid',
+               paid_at=?,
+               sepay_tx_id=COALESCE(?, sepay_tx_id),
+               status=?
+           WHERE id=?""",
+        (now(), sepay_tx_id, next_status, order_dict["id"]),
+    )
+    if order_dict.get("user_id"):
+        u_push = conn.execute("SELECT push_token FROM users WHERE id=?", (order_dict["user_id"],)).fetchone()
+        if u_push and u_push["push_token"]:
+            return u_push["push_token"]
+    return None
 
 
 def create_app(settings: Settings | None = None, engine=None, analyzer=None):
@@ -462,7 +529,8 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
         with db.connect() as conn:
             conn.execute("SELECT 1").fetchone()
         return {"status": "ok", "database": "postgresql" if db.postgres else "sqlite",
-                "ai_ready": service.engine.enabled, "engine": "openvto", "model": settings.image_model, "demo_accounts": settings.seed_demo}
+                "ai_ready": service.engine.enabled, "engine": "openvto", "model": settings.image_model,
+                "tryon_angles": list(settings.tryon_angles), "demo_accounts": settings.seed_demo}
 
     @app.post("/api/auth/register", status_code=201)
     def register(body: Register):
@@ -580,12 +648,9 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             if not pkg:
                 raise HTTPException(404, "Gói thử đồ không tồn tại hoặc đã ngừng hoạt động.")
 
-            code_chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-            payment_code = "FIT" + "".join(secrets.choice(code_chars) for _ in range(6))
+            payment_code = generate_payment_code("FIT")
             trans_id = uuid.uuid4().hex
-
-            encoded_name = urllib.parse.quote(settings.bank_account_name)
-            qr_url = f"https://img.vietqr.io/image/{settings.bank_id}-{settings.bank_account}-compact2.png?amount={pkg['price']}&addInfo={payment_code}&accountName={encoded_name}"
+            qr_url = build_sepay_qr_url(settings, pkg["price"], payment_code)
 
             conn.execute("""
                 INSERT INTO payment_transactions (id, user_id, package_id, amount, tryons, payment_code, status, qr_url, created_at)
@@ -690,33 +755,114 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             raise HTTPException(503, "Webhook thanh toán chưa được cấu hình khóa bảo mật.")
         supplied = (x_webhook_secret or "").strip()
         if not supplied and authorization:
-            for prefix in ("Apikey ", "Bearer "):
-                if authorization.startswith(prefix):
-                    supplied = authorization[len(prefix):].strip()
+            auth_trimmed = authorization.strip()
+            auth_lower = auth_trimmed.lower()
+            for prefix in ("apikey ", "bearer "):
+                if auth_lower.startswith(prefix):
+                    supplied = auth_trimmed[len(prefix):].strip()
                     break
         if not supplied or not hmac.compare_digest(supplied, settings.payment_webhook_secret):
             raise HTTPException(401, "Chữ ký hoặc khóa Webhook không hợp lệ.")
 
-        text = f"{body.get('content', '')} {body.get('description', '')} {body.get('code', '')}"
-        match = re.search(r"FIT[A-Z0-9]{6}", text.upper())
-        if not match:
-            return {"status": "ignored", "reason": "No matching payment code"}
-        code = match.group(0)
+        transfer_type = str(body.get("transferType") or "in").strip().lower()
+        if transfer_type != "in":
+            return {"success": True, "status": "ignored", "reason": "Outgoing transfer ignored"}
+
+        incoming_account = normalize_account_number(body.get("accountNumber"))
+        expected_account = normalize_account_number(settings.bank_account)
+        if incoming_account and expected_account and incoming_account != expected_account:
+            return {"success": True, "status": "ignored", "reason": "Account number mismatch"}
+
         raw_amount = body.get("transferAmount") if body.get("transferAmount") is not None else body.get("amount")
         try:
-            paid_amount = int(raw_amount) if raw_amount is not None else 0
+            paid_amount = int(round(float(raw_amount))) if raw_amount is not None else 0
         except (TypeError, ValueError):
             paid_amount = 0
 
+        sepay_id = str(body.get("id")).strip() if body.get("id") is not None and str(body.get("id")).strip() else None
+        reference_code = str(body.get("referenceCode") or "").strip() or None
+        gateway = str(body.get("gateway") or "").strip() or None
+        raw_content = f"{body.get('code') or ''} {body.get('content') or ''} {body.get('description') or ''}".strip()
+        text_upper = raw_content.upper()
+
+        fit_codes = list(dict.fromkeys(re.findall(r"FIT[A-Z0-9]{6}", text_upper)))
+        order_codes = list(dict.fromkeys(re.findall(r"SF[A-Z0-9]{6}", text_upper)))
+
+        push_order_target: tuple[str, str] | None = None
+        matched_order_id: str | None = None
+
+        def record_webhook(conn, matched_kind: str, matched_id: str | None = None):
+            if not sepay_id:
+                return
+            conn.execute(
+                """INSERT INTO sepay_webhooks (sepay_id, reference_code, gateway, account_number, transfer_type, transfer_amount, content, matched_kind, matched_id, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT (sepay_id) DO NOTHING""",
+                (sepay_id, reference_code, gateway, incoming_account or None, transfer_type, paid_amount, raw_content[:500], matched_kind, matched_id, now()),
+            )
+
         with db.connect() as conn:
             db.begin_write(conn)
-            row = conn.execute("SELECT * FROM payment_transactions WHERE payment_code=? AND status IN ('pending', 'verifying')", (code,)).fetchone()
-            if not row:
-                return {"status": "ignored", "reason": "Transaction not found or already completed"}
-            if paid_amount < row["amount"]:
-                return {"status": "ignored", "reason": "Insufficient transfer amount"}
-            result = complete_payment_transaction(conn, row, settings)
-            return result
+            if sepay_id and conn.execute("SELECT 1 FROM sepay_webhooks WHERE sepay_id=?", (sepay_id,)).fetchone():
+                return {"success": True, "status": "duplicate", "reason": "Transaction already processed"}
+
+            # 1. Try matching AI Try-On Top-Up transactions (FITxxxxxx)
+            for code in fit_codes:
+                row = conn.execute(
+                    "SELECT * FROM payment_transactions WHERE payment_code=? AND status IN ('pending', 'verifying')",
+                    (code,),
+                ).fetchone()
+                if not row:
+                    continue
+                if paid_amount < row["amount"]:
+                    record_webhook(conn, "ignored", row["id"])
+                    return {"success": True, "status": "ignored", "reason": "Insufficient transfer amount"}
+                result = complete_payment_transaction(
+                    conn,
+                    row,
+                    settings,
+                    sepay_tx_id=sepay_id,
+                    reference_code=reference_code,
+                    gateway=gateway,
+                    paid_amount=paid_amount,
+                )
+                record_webhook(conn, "topup", row["id"])
+                return {"success": True, "kind": "topup", **result}
+
+            # 2. Try matching E-Commerce Orders (SFxxxxxx)
+            for code in order_codes:
+                order = conn.execute(
+                    "SELECT * FROM orders WHERE payment_code=? AND payment_method='vietqr' AND payment_status IN ('unpaid', 'verifying') AND status != 'cancelled'",
+                    (code,),
+                ).fetchone()
+                if not order:
+                    continue
+                if paid_amount < order["total"]:
+                    record_webhook(conn, "ignored", order["id"])
+                    return {"success": True, "status": "ignored", "reason": "Insufficient transfer amount"}
+                push_token = mark_order_paid(conn, order, sepay_tx_id=sepay_id)
+                record_webhook(conn, "order", order["id"])
+                matched_order_id = order["id"]
+                if push_token:
+                    push_order_target = (push_token, order["id"])
+                break
+
+            if not matched_order_id:
+                record_webhook(conn, "ignored", None)
+                return {"success": True, "status": "ignored", "reason": "No matching pending payment"}
+
+        if push_order_target:
+            token, oid = push_order_target
+            try:
+                send_push_notification(
+                    token,
+                    "Thanh toán VietQR thành công ✨",
+                    f"ShopFit đã nhận chuyển khoản cho đơn SF · {oid[:8].upper()}. Đơn hàng đã được tự động xác nhận!",
+                    {"screen": "/orders", "orderId": oid},
+                )
+            except Exception:
+                pass
+        return {"success": True, "kind": "order", "status": "paid", "order_id": matched_order_id}
 
     @app.get("/api/user/vouchers")
     def get_user_vouchers(user=Depends(current_user)):
@@ -979,15 +1125,24 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
 
             return db.product(conn, conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone())
 
+    def _enrich_order_dict(data: dict) -> dict:
+        data.pop("request_key", None)
+        data.pop("request_fingerprint", None)
+        data["payment_method"] = data.get("payment_method") or "cod"
+        data["payment_status"] = data.get("payment_status") or "unpaid"
+        if data["payment_method"] == "vietqr":
+            data["bank_id"] = settings.bank_id
+            data["bank_account"] = settings.bank_account
+            data["bank_account_name"] = settings.bank_account_name
+        return data
+
     def serialize_order(conn, row):
         items = []
         for item in conn.execute("SELECT * FROM order_items WHERE order_id=?", (row["id"],)):
             review = conn.execute("SELECT actual_fit,notes,share_public,updated_at FROM fit_reviews WHERE order_item_id=?", (item["id"],)).fetchone()
             rev_dict = {"actual_fit": review["actual_fit"], "notes": review["notes"], "share_public": bool(review["share_public"]), "updated_at": review["updated_at"]} if review else None
             items.append({**dict(item), "fit_review": rev_dict})
-        data = dict(row)
-        data.pop("request_key", None)
-        data.pop("request_fingerprint", None)
+        data = _enrich_order_dict(dict(row))
         return {**data, "items": items}
 
     def serialize_orders_bulk(conn, rows):
@@ -1008,9 +1163,7 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             items_by_order[item["order_id"]].append({**item, "fit_review": reviews_by_item.get(item["id"])})
         result = []
         for r in rows:
-            data = dict(r)
-            data.pop("request_key", None)
-            data.pop("request_fingerprint", None)
+            data = _enrich_order_dict(dict(r))
             result.append({**data, "items": items_by_order[r["id"]]})
         return result
 
@@ -1064,8 +1217,37 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             discount_amount = min(subtotal, vip_discount + voucher_discount)
             total = max(0, subtotal - discount_amount)
 
-            conn.execute("""INSERT INTO orders (id,user_id,customer_name,phone,address,note,total,subtotal,discount_amount,voucher_code,created_at,request_key,request_fingerprint)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (oid, user["id"], body.customer_name.strip(), body.phone, body.address.strip(), body.note, total, subtotal, discount_amount, applied_voucher_code, now(), request_key, fingerprint))
+            order_status_init = "pending"
+            payment_method = body.payment_method
+            payment_status = "unpaid"
+            order_payment_code = None
+            order_qr_url = None
+            paid_at = None
+            created_ts = now()
+
+            if payment_method == "vietqr":
+                if total == 0:
+                    payment_status = "paid"
+                    order_status_init = "confirmed"
+                    paid_at = created_ts
+                else:
+                    for _ in range(8):
+                        candidate = generate_payment_code("SF")
+                        if not conn.execute("SELECT 1 FROM orders WHERE payment_code=?", (candidate,)).fetchone():
+                            order_payment_code = candidate
+                            break
+                    if not order_payment_code:
+                        order_payment_code = f"SF{oid[:6].upper()}"
+                    order_qr_url = build_sepay_qr_url(settings, total, order_payment_code)
+
+            conn.execute(
+                """INSERT INTO orders (id,user_id,customer_name,phone,address,note,total,subtotal,discount_amount,voucher_code,
+                   payment_method,payment_status,payment_code,payment_qr_url,paid_at,status,created_at,request_key,request_fingerprint)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (oid, user["id"], body.customer_name.strip(), body.phone, body.address.strip(), body.note, total, subtotal,
+                 discount_amount, applied_voucher_code, payment_method, payment_status, order_payment_code, order_qr_url,
+                 paid_at, order_status_init, created_ts, request_key, fingerprint),
+            )
             for item, p in lines:
                 conn.execute("""INSERT INTO order_items (order_id,product_id,name,image_url,size,color,quantity,price)
                     VALUES (?,?,?,?,?,?,?,?)""", (oid, p["id"], p["name"], p["image_url"], item.size, item.color, item.quantity, p["price"]))
@@ -1077,6 +1259,58 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             rows = conn.execute("SELECT * FROM orders ORDER BY created_at DESC LIMIT 200") if user["role"] == "admin" else conn.execute("SELECT * FROM orders WHERE user_id=? ORDER BY created_at DESC LIMIT 100", (user["id"],))
             return serialize_orders_bulk(conn, rows)
 
+    @app.get("/api/orders/{order_id}")
+    def get_order_detail(order_id: str, user=Depends(current_user)):
+        with db.connect() as conn:
+            row = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+            if not row or (user["role"] != "admin" and row["user_id"] != user["id"]):
+                raise HTTPException(404, "Không tìm thấy đơn hàng.")
+            return serialize_order(conn, row)
+
+    @app.post("/api/orders/{order_id}/report-paid")
+    def report_order_paid(order_id: str, user=Depends(current_user)):
+        with db.connect() as conn:
+            db.begin_write(conn)
+            order = conn.execute("SELECT * FROM orders WHERE id=? AND user_id=?", (order_id, user["id"])).fetchone()
+            if not order:
+                raise HTTPException(404, "Không tìm thấy đơn hàng.")
+            order_dict = dict(order)
+            if order_dict.get("payment_method") != "vietqr":
+                raise HTTPException(400, "Đơn hàng này thanh toán khi nhận hàng (COD).")
+            if order_dict["status"] == "cancelled":
+                raise HTTPException(409, "Đơn hàng đã hủy không thể báo chuyển khoản.")
+            if order_dict.get("payment_status") == "paid":
+                return serialize_order(conn, order)
+            conn.execute("UPDATE orders SET payment_status='verifying' WHERE id=? AND payment_status='unpaid'", (order_id,))
+            return serialize_order(conn, conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())
+
+    @app.post("/api/admin/orders/{order_id}/confirm-payment")
+    def admin_confirm_order_payment(order_id: str, user=Depends(admin)):
+        push_token = None
+        with db.connect() as conn:
+            db.begin_write(conn)
+            order = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+            if not order:
+                raise HTTPException(404, "Không tìm thấy đơn hàng.")
+            order_dict = dict(order)
+            if order_dict.get("payment_method") != "vietqr":
+                raise HTTPException(400, "Đơn hàng này không dùng phương thức VietQR.")
+            if order_dict["status"] == "cancelled":
+                raise HTTPException(409, "Đơn hàng đã hủy không thể xác nhận thanh toán.")
+            push_token = mark_order_paid(conn, order)
+            updated = serialize_order(conn, conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone())
+        if push_token:
+            try:
+                send_push_notification(
+                    push_token,
+                    "Thanh toán VietQR thành công ✨",
+                    f"Chủ shop đã xác nhận chuyển khoản cho đơn SF · {order_id[:8].upper()}.",
+                    {"screen": "/orders", "orderId": order_id},
+                )
+            except Exception:
+                pass
+        return updated
+
     @app.patch("/api/orders/{order_id}")
     def order_status(order_id: str, body: StatusPatch, user=Depends(current_user)):
         transitions = {"pending": {"confirmed", "cancelled"}, "confirmed": {"shipping", "cancelled"}, "shipping": {"completed", "cancelled"}, "completed": set(), "cancelled": set()}
@@ -1086,11 +1320,13 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             order = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
             if not order or (user["role"] != "admin" and order["user_id"] != user["id"]):
                 raise HTTPException(404, "Không tìm thấy đơn hàng.")
+            order_dict = dict(order)
+            if user["role"] != "admin" and order_dict.get("payment_status") == "paid":
+                raise HTTPException(409, "Đơn hàng đã thanh toán chuyển khoản. Vui lòng liên hệ shop để được hỗ trợ.")
             if user["role"] != "admin" and (body.status != "cancelled" or order["status"] != "pending"):
                 raise HTTPException(403, "Bạn chỉ có thể hủy đơn đang chờ xác nhận.")
             if body.status not in transitions[order["status"]]:
                 raise HTTPException(409, "Không thể chuyển đơn sang trạng thái này.")
-            order_dict = dict(order)
             if body.status == "cancelled":
                 for item in conn.execute("SELECT * FROM order_items WHERE order_id=?", (order_id,)):
                     conn.execute("UPDATE variants SET stock=stock+? WHERE product_id=? AND size=? AND color=?", (item["quantity"], item["product_id"], item["size"], item["color"]))
@@ -1142,10 +1378,14 @@ def create_app(settings: Settings | None = None, engine=None, analyzer=None):
             conversion_rate = min(100.0, round((converted_users / tryon_users * 100), 1)) if tryon_users > 0 else 0.0
             low_stock_count = conn.execute("SELECT count(DISTINCT product_id) FROM variants WHERE stock <= 3").fetchone()[0]
             pending_payments = conn.execute("SELECT count(*) FROM payment_transactions WHERE status='verifying'").fetchone()[0]
+            pending_order_payments = conn.execute(
+                "SELECT count(*) FROM orders WHERE payment_method='vietqr' AND payment_status='verifying' AND status != 'cancelled'"
+            ).fetchone()[0]
             return {
                 "products": conn.execute("SELECT count(*) FROM products WHERE active=1").fetchone()[0],
                 "pending_orders": conn.execute("SELECT count(*) FROM orders WHERE status='pending'").fetchone()[0],
                 "pending_payments": pending_payments,
+                "pending_order_payments": pending_order_payments,
                 "revenue": conn.execute("SELECT coalesce(sum(total),0) FROM orders WHERE status='completed'").fetchone()[0],
                 "tryons": completed_tryons,
                 "conversion_rate": conversion_rate,

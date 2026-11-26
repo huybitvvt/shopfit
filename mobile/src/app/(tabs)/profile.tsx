@@ -368,7 +368,7 @@ export default function Profile() {
             <View style={{ flex: 1 }}>
               <Text style={{ fontFamily: t.fonts.bold, fontSize: 13, color: t.colors.ink }}>Tặng 3 lượt thử đồ AI miễn phí</Text>
               <Text style={[s.muted, { fontSize: 11, marginTop: 2 }]}>
-                Đăng ký tài khoản ngay hôm nay để trải nghiệm thử đồ 4 góc bằng AI.
+                Đăng ký tài khoản ngay hôm nay để trải nghiệm phòng thử đồ ảo AI & tư vấn size.
               </Text>
             </View>
           </View>

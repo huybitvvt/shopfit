@@ -59,6 +59,7 @@ function FittingRoomContent() {
   const size = sizeChoice && product?.sizes.includes(sizeChoice) ? sizeChoice : defaultSize;
 
   const jobId = job?.id;
+  const isMultiAngle = (health?.tryon_angles?.length ?? 1) > 1;
   const running = job?.status === 'queued' || job?.status === 'processing';
   const locked = running || busy || checking;
   const stock = product?.variants.find(v => v.size === size && v.color === color)?.stock || 0;
@@ -260,7 +261,7 @@ function FittingRoomContent() {
 
   return (
     <Screen scrollRef={scrollRef} onRefresh={loadHistory}>
-      <Header title="Phòng thử của bạn" subtitle="FOUR VIEWS · YOUR FIT" right={<CartButton />} />
+      <Header title="Phòng thử của bạn" subtitle={isMultiAngle ? 'FOUR VIEWS · YOUR FIT' : 'AI FITTING ROOM · YOUR FIT'} right={<CartButton />} />
 
       <View
         style={{
@@ -322,7 +323,9 @@ function FittingRoomContent() {
                 <View style={[s.row, { marginTop: 12, backgroundColor: '#F3F7F4', padding: 12, borderRadius: 10 }]}>
                   <ActivityIndicator size="small" color={t.colors.green} />
                   <Text accessibilityLiveRegion="polite" style={[s.muted, { flex: 1, fontSize: 12 }]}>
-                    Đang tạo lần lượt 4 góc (~20–35 giây). Bạn có thể xem ngay từng góc vừa hoàn tất.
+                    {isMultiAngle
+                      ? 'Đang tạo lần lượt 4 góc (~20–35 giây). Bạn có thể xem ngay từng góc vừa hoàn tất.'
+                      : 'Đang tạo ảnh thử đồ AI (~10–20 giây). Vui lòng giữ màn hình trong giây lát.'}
                   </Text>
                 </View>
               )}
@@ -565,9 +568,11 @@ function FittingRoomContent() {
             </>
           )}
 
-          <Text style={[s.kicker, { marginTop: 16 }]}>02 / TẠO BỘ ẢNH BỐN GÓC</Text>
+          <Text style={[s.kicker, { marginTop: 16 }]}>{isMultiAngle ? '02 / TẠO BỘ ẢNH BỐN GÓC' : '02 / TẠO ẢNH THỬ ĐỒ AI'}</Text>
           <Text style={[s.muted, { marginVertical: 12 }]}>
-            Tạo 4 ảnh riêng: trước, trái, sau, phải. Dùng mũi tên để chuyển ảnh. Mỗi lượt đầy đủ gọi tạo ảnh 4 lần, kèm kiểm tra ảnh đầu vào và sự nhất quán giữa các góc.
+            {isMultiAngle
+              ? 'Tạo 4 ảnh riêng: trước, trái, sau, phải. Dùng mũi tên để chuyển ảnh. Mỗi lượt đầy đủ gọi tạo ảnh 4 lần, kèm kiểm tra ảnh đầu vào và sự nhất quán giữa các góc.'
+              : 'Tạo ảnh thử đồ toàn thân mặt trước bằng AI dựa trên dáng người và thông số sản phẩm, kèm kiểm duyệt chất lượng ảnh đầu vào và trang phục đầu ra.'}
           </Text>
 
           {!readyProfile && user && (
@@ -604,7 +609,15 @@ function FittingRoomContent() {
             disabled={!!user && (!photo || !product || locked || !health?.ai_ready || !check?.accepted || !stock)}
             loading={busy}
           >
-            {!user ? 'Đăng nhập để thử đồ' : running ? 'Đang tạo bộ ảnh bốn góc' : 'Tạo 4 ảnh thử đồ của tôi'}
+            {!user
+              ? 'Đăng nhập để thử đồ'
+              : running
+              ? isMultiAngle
+                ? 'Đang tạo bộ ảnh bốn góc'
+                : 'Đang tạo ảnh thử đồ AI'
+              : isMultiAngle
+              ? 'Tạo 4 ảnh thử đồ của tôi'
+              : 'Tạo ảnh thử đồ của tôi'}
           </Button>
 
           {/* Prominent AI Disclaimer Card for Store Compliance & User Trust */}
@@ -627,7 +640,7 @@ function FittingRoomContent() {
               <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start' }}>
                 <Text style={{ color: t.colors.green, fontSize: 14, lineHeight: 18 }}>•</Text>
                 <Text style={{ flex: 1, fontSize: 12, color: '#3A4841', lineHeight: 18 }}>
-                  Hình ảnh 4 góc là kết quả mô phỏng do <Text style={{ fontFamily: t.fonts.bold }}>AI tạo sinh</Text> nhằm hỗ trợ hình dung phong cách và phom dáng.
+                  Hình ảnh là kết quả mô phỏng do <Text style={{ fontFamily: t.fonts.bold }}>AI tạo sinh</Text> nhằm hỗ trợ hình dung phong cách và phom dáng.
                 </Text>
               </View>
               <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start' }}>
@@ -676,7 +689,13 @@ function FittingRoomContent() {
               />
               <Text style={[s.text, { fontSize: 12, marginTop: 8 }]}>{item.product_name}</Text>
               <Text style={[s.muted, { fontSize: 10 }]}>
-                Size {item.size || '—'} · {item.views.filter(v => v.status === 'completed').length}/4 góc · {dateLabel(item.created_at)}
+                {(() => {
+                  const activeViews = item.views.filter(v => v.status !== 'unavailable');
+                  const totalAngles = activeViews.length || 1;
+                  const doneAngles = activeViews.filter(v => v.status === 'completed').length;
+                  const viewLabel = totalAngles > 1 ? `${doneAngles}/${totalAngles} góc` : doneAngles > 0 ? 'Hoàn tất' : 'Đang xử lý';
+                  return `Size ${item.size || '—'} · ${viewLabel} · ${dateLabel(item.created_at)}`;
+                })()}
               </Text>
             </Pressable>
           ))}

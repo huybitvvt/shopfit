@@ -19,7 +19,7 @@ TABLES = (
     "users", "sessions", "products", "variants", "orders", "order_items", "tryons",
     "body_profiles", "photo_checks", "tryon_evaluations", "wardrobe", "fit_reviews",
     "ai_calls", "retry_requests", "password_resets", "reports",
-    "token_packages", "payment_transactions", "user_vouchers",
+    "token_packages", "payment_transactions", "user_vouchers", "sepay_webhooks",
 )
 POSTGRES_SCHEMA = Path(__file__).resolve().parents[2] / "supabase" / "migrations" / "20261110090000_shopfit.sql"
 
@@ -182,10 +182,17 @@ class Database:
             "subtotal": "INTEGER",
             "discount_amount": "INTEGER NOT NULL DEFAULT 0",
             "voucher_code": "TEXT",
+            "payment_method": "TEXT NOT NULL DEFAULT 'cod'",
+            "payment_status": "TEXT NOT NULL DEFAULT 'unpaid'",
+            "payment_code": "TEXT",
+            "payment_qr_url": "TEXT",
+            "sepay_tx_id": "TEXT",
+            "paid_at": "TEXT",
         }.items():
             if name not in order_columns:
                 conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {decl}")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_order_request ON orders(user_id,request_key) WHERE request_key IS NOT NULL")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_payment_code ON orders(payment_code) WHERE payment_code IS NOT NULL")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at)")
         columns = {r[1] for r in conn.execute("PRAGMA table_info(tryons)")}
         for name, declaration in {
@@ -247,7 +254,8 @@ class Database:
                 id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
                 package_id TEXT NOT NULL REFERENCES token_packages(id), amount INTEGER NOT NULL,
                 tryons INTEGER NOT NULL, payment_code TEXT UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-                qr_url TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, completed_at TEXT
+                qr_url TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, completed_at TEXT,
+                sepay_tx_id TEXT, reference_code TEXT, gateway TEXT, paid_amount INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_trans_user ON payment_transactions(user_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_trans_code ON payment_transactions(payment_code);
@@ -256,7 +264,22 @@ class Database:
                 discount_amount INTEGER NOT NULL, min_order INTEGER NOT NULL DEFAULT 0,
                 used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS sepay_webhooks (
+                sepay_id TEXT PRIMARY KEY, reference_code TEXT, gateway TEXT, account_number TEXT,
+                transfer_type TEXT NOT NULL, transfer_amount INTEGER NOT NULL DEFAULT 0,
+                content TEXT NOT NULL DEFAULT '', matched_kind TEXT NOT NULL DEFAULT 'ignored',
+                matched_id TEXT, created_at TEXT NOT NULL
+            );
         """)
+        pt_cols = {r[1] for r in conn.execute("PRAGMA table_info(payment_transactions)")}
+        for name, decl in {
+            "sepay_tx_id": "TEXT",
+            "reference_code": "TEXT",
+            "gateway": "TEXT",
+            "paid_amount": "INTEGER",
+        }.items():
+            if name not in pt_cols:
+                conn.execute(f"ALTER TABLE payment_transactions ADD COLUMN {name} {decl}")
         fit_review_cols = {r[1] for r in conn.execute("PRAGMA table_info(fit_reviews)")}
         if "share_public" not in fit_review_cols:
             conn.execute("ALTER TABLE fit_reviews ADD COLUMN share_public INTEGER NOT NULL DEFAULT 0")

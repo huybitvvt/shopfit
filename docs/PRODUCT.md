@@ -15,7 +15,7 @@ Dashboard tự động gắn cờ nhắc chủ shop kiểm tra lại phom/bảng
 - **Chống tạo trùng (`X-Idempotency-Key`):** Mọi thao tác nhạy cảm (tạo lượt thử AI, thử lại góc lỗi, đặt đơn hàng) đều gắn khóa bất biến theo nội dung và tài khoản, ngăn trừ tồn kho hoặc trừ lượt thử hai lần khi mạng di động chập chờn.
 - **Hàng đợi 4 góc nhìn bền vững:** Trạng thái từng góc (`front`, `left`, `back`, `right`) được lưu trên Supabase PostgreSQL (hoặc SQLite khi chạy cục bộ), kết hợp lưu trữ đối tượng S3 giúp không mất ảnh khi máy chủ khởi động lại.
 - **Kiểm duyệt hai lớp & Sổ cái ngân sách (`AI Usage Ledger`):** Kiểm tra ảnh đầu vào trước khi sinh ảnh, đối chiếu trang phục ở ảnh đầu ra và ghi nhận ngân sách dự trù theo ngày UTC để tránh vượt trần chi phí API.
-- **Thanh toán & Hạng thành viên minh bạch:** Đơn nạp lượt VietQR yêu cầu xác thực chữ ký Webhook hoặc phê duyệt từ chủ shop (`chushop`); chiết khấu hạng thành viên VIP (`Đồng · Bạc · Vàng · Kim Cương`) chỉ nâng hạng dựa trên tổng chi tiêu thực tế của các đơn đã hoàn tất.
+- **Thanh toán tự động SePay VietQR & Hạng thành viên minh bạch:** Hỗ trợ song song **COD** và **Chuyển khoản VietQR qua SePay** cho cả đơn hàng TMĐT (`SFxxxxxx`) lẫn nạp lượt thử AI (`FITxxxxxx`). Webhook xác thực `Authorization: Apikey`, chỉ nhận tiền vào (`transferType=in`), chống trùng bằng bảng `sepay_webhooks`, trả chuẩn `{"success": true}` và tự động cập nhật đơn / cộng lượt theo thời gian thực; chủ shop vẫn có nút xác nhận thủ công dự phòng. Chiết khấu hạng VIP (`Đồng · Bạc · Vàng · Kim Cương`) chỉ nâng hạng dựa trên tổng chi tiêu thực tế của các đơn đã hoàn tất.
 
 ## Kịch bản Bảo vệ Đồ án (5–7 phút trên Điện thoại / APK + Web)
 
@@ -23,9 +23,9 @@ Dashboard tự động gắn cờ nhắc chủ shop kiểm tra lại phom/bảng
    - Mở ứng dụng bằng tài khoản `khachhang@shopfit.vn` (`123456`).
    - Chọn sản phẩm **Áo sơ mi Linen** → chạm phóng to toàn màn hình `2x` xem 3 góc ảnh (Trước / Sau / Cận chất vải).
    - Chuyển đổi giữa size `S`, `M`, `L` để hội đồng quan sát **FitMap 3 vùng**, đối chiếu với **Sơ mi công sở đang mặc vừa** và đọc mục **Người đã mua nói gì về size?** (biểu đồ + nhận xét ẩn danh `N*** A***`).
-2. **Phòng thử đồ ảo AI 4 góc & Mua hàng Try-to-Buy (2 phút):**
+2. **Phòng thử đồ ảo AI & Mua hàng Try-to-Buy thanh toán SePay VietQR (2 phút):**
    - Chuyển sang **Phòng thử AI**, chụp/chọn ảnh toàn thân → hệ thống tự nén ảnh trên máy và kiểm duyệt tư thế.
-   - Xem kết quả 4 góc (`Trước · Trái · Sau · Phải`), bấm so sánh với ảnh gốc, phóng to `2x` và nhấn nút **Thêm ngay Size M vào giỏ** ngay dưới ảnh kết quả → áp dụng ưu đãi VIP / Voucher và đặt hàng COD.
+   - Xem ảnh kết quả thử đồ AI (chế độ 1 góc nhanh trên Production; hỗ trợ mở rộng 4 góc qua cấu hình `TRYON_ANGLES`), bấm so sánh với ảnh gốc, phóng to `2x` và nhấn nút **Thêm ngay Size M vào giỏ** → áp dụng ưu đãi VIP / Voucher, chọn **COD** hoặc **Chuyển khoản VietQR (SePay)** để hiện mã QR động tự động đối soát.
 3. **Kiểm chứng Năng lực Di động Ngoại tuyến & AdMob (1 phút):**
    - Trên máy Android cài `ShopFit-preview.apk`: chỉ ra Google Test Adaptive Banner ở cuối trang chủ, sau đó bật **Chế độ máy bay (Airplane Mode)** để chứng minh danh mục, bảng size và giỏ hàng vẫn hoạt động mượt từ bộ nhớ đệm ngoại tuyến kèm thanh thông báo kết nối lại.
 4. **Góc nhìn Chủ Shop & Phân tích Chuyển đổi AI (1.5 phút):**

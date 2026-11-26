@@ -1,8 +1,8 @@
-# ShopFit Studio — Ứng dụng TMĐT Thời trang tích hợp Phòng thử đồ ảo AI 4 góc & Tư vấn Size thông minh
+# ShopFit Studio — Ứng dụng TMĐT Thời trang tích hợp Phòng thử đồ ảo AI, Tư vấn Size & Thanh toán VietQR (SePay)
 
 [![CI](https://github.com/huybitvvt/shopfit/actions/workflows/ci.yml/badge.svg)](https://github.com/huybitvvt/shopfit/actions/workflows/ci.yml)
 
-**ShopFit Studio** là đồ án môn **Phát triển Ứng dụng Di động**, kết hợp luồng mua sắm thương mại điện tử thời trang hoàn chỉnh trên thiết bị di động (Android / iOS / Web) với **Phòng thử đồ ảo AI 4 góc nhìn** (Gemini / OpenVTO) và **Hệ thống tư vấn chọn size có giải thích (FitMap & Tủ đồ tham chiếu)**.
+**ShopFit Studio** là đồ án môn **Phát triển Ứng dụng Di động**, kết hợp luồng mua sắm thương mại điện tử thời trang hoàn chỉnh trên thiết bị di động (Android / iOS / Web) với **Phòng thử đồ ảo AI** (Gemini / OpenVTO — hỗ trợ chế độ 1 góc nhanh trên Production và mở rộng đa góc), **Hệ thống tư vấn chọn size có giải thích (FitMap & Tủ đồ tham chiếu)** và **Thanh toán chuyển khoản tự động VietQR qua SePay Webhook**.
 
 Định vị cốt lõi: **“Xem mình mặc · Hiểu vì sao vừa · Đối chiếu với thực tế”** — giúp khách mua online tự tin chọn đúng size, đồng thời cung cấp công cụ quản trị tồn kho đa biến thể và phân tích chuyển đổi AI (`Try-to-Buy`) cho chủ shop.
 
@@ -67,16 +67,16 @@ flowchart LR
 - **Bảo mật phiên & Quyền riêng tư (`expo-secure-store`):** Lưu token phiên đăng nhập mã hóa trên Android/iOS, tự động xử lý hết hạn phiên (`401`), hỗ trợ xóa vĩnh viễn tài khoản theo chuẩn quyền riêng tư trên kho ứng dụng (ẩn danh hóa hóa đơn cũ không gây lỗi khóa ngoại).
 - **Tích hợp Google AdMob chuẩn học phần (`react-native-google-mobile-ads`):** Bản APK Android tích hợp Adaptive Test Banner chính thức của Google ở cuối trang bộ sưu tập, tự động ẩn trên phiên bản Web thương mại (chi tiết tại [ADMOB.md](file:///e:/ckimobile/docs/ADMOB.md)).
 
-### B. Phòng thử đồ ảo AI 4 góc nhìn & Tư vấn Size thông minh
+### B. Phòng thử đồ ảo AI & Tư vấn Size thông minh
 1. **Kiểm tra ảnh đầu vào bằng AI Vision (`/api/photo-check`):** Xác nhận ảnh rõ nét, đứng thẳng toàn thân trước khi trừ hạn mức tạo ảnh.
-2. **Sinh đồng bộ 4 góc nhìn (`Trước · Trái · Sau · Phải`):** Tận dụng ảnh mặt sau thực tế (`back_image_url`) do chủ shop tải lên để tái tạo đúng lưng áo/đầm thay vì đoán mù; kiểm tra hậu kỳ trang phục & giày giữa các góc, có cơ chế `Retry` riêng góc lỗi và nút báo cáo nội dung AI.
+2. **Kiến trúc sinh ảnh linh hoạt (`TRYON_ANGLES`):** Mặc định cấu hình chế độ **1 góc mặt trước tốc độ cao (`front`)** trên Render giúp khách hàng nhận ảnh nhanh ~10–20 giây, đồng thời hỗ trợ mở rộng đồng bộ **4 góc nhìn (`front,left,back,right`)** tận dụng ảnh mặt sau thực tế (`back_image_url`), kiểm duyệt hậu kỳ và cơ chế `Retry` riêng góc lỗi cùng nút báo cáo nội dung AI.
 3. **Bản đồ độ vừa có giải thích (`Atelier Silhouette FitMap`):** Đối chiếu trực quan 3 vùng **Ngực · Eo · Mông** giữa cơ thể người mặc và thông số thành phẩm kèm độ dư chuẩn (`ease`), thước đo `Fit Gauge` 5 nấc và cảnh báo khi có vùng bị chật dù tổng điểm lệch thấp.
 4. **Chọn nhanh vóc dáng 1 chạm & Tủ đồ tham chiếu (`/api/wardrobe`):** Cho phép chọn khung vóc dáng chuẩn Nam/Nữ (`S, M, L, XL`) không cần thước dây, hoặc đối chiếu trực tiếp từng cm với món đồ sẵn có ở nhà.
 5. **Phản hồi Size từ Đơn đã giao (`/api/products/{id}/fit-feedback`):** Chỉ khách đã nhận hàng hoàn tất mới được gửi đánh giá `Chật / Vừa / Rộng`. Hỗ trợ tùy chọn chia sẻ nhận xét ẩn danh (`N*** A***`) giúp khách sau chọn size mà vẫn bảo vệ danh tính.
 
-### C. Thương mại Điện tử, VIP Loyalty & Quản trị Chủ Shop
-- **Giỏ hàng & Thanh toán chống tạo trùng (`X-Idempotency-Key`):** Đồng bộ giá & tồn kho theo thời gian thực, tự động tính chiết khấu hạng thành viên VIP (`Đồng · Bạc 5% · Vàng 10% · Kim Cương 15%` dựa trên đơn hoàn tất) và áp dụng mã giảm giá (`Voucher`).
-- **Nạp lượt thử VietQR an toàn:** Sinh mã QR chuyển khoản tự động; tách biệt bước khách báo đã chuyển (`verifying`) với bước xác thực Webhook có chữ ký bí mật hoặc Chủ shop duyệt 1 chạm trên trang quản trị.
+### C. Thương mại Điện tử, Thanh toán SePay VietQR, VIP Loyalty & Quản trị Chủ Shop
+- **Giỏ hàng & Thanh toán đa phương thức (`COD` + `VietQR SePay`) chống tạo trùng (`X-Idempotency-Key`):** Đồng bộ giá & tồn kho theo thời gian thực, tự động tính chiết khấu hạng thành viên VIP (`Đồng · Bạc 5% · Vàng 10% · Kim Cương 15%` dựa trên đơn hoàn tất) và áp dụng mã giảm giá (`Voucher`).
+- **Đối soát tự động qua SePay Webhook (`POST /api/payment/webhook`):** Áp dụng cho cả **Thanh toán đơn hàng (`SFxxxxxx`)** và **Nạp lượt thử đồ AI (`FITxxxxxx`)**. Sinh mã VietQR động qua `qr.sepay.vn/img`, xác thực header `Authorization: Apikey`, lọc giao dịch tiền vào (`transferType=in`), chống xử lý trùng theo mã giao dịch SePay (`sepay_webhooks`), tự động cập nhật trạng thái đơn sang `Đã thanh toán / Đã xác nhận` hoặc cộng lượt + phát Voucher và gửi Push Notification theo thời gian thực; vẫn có nút Chủ shop duyệt thủ công làm dự phòng.
 - **Trung tâm Quản trị Chủ shop (`/admin` & `/orders`):** Đăng/sửa toàn diện sản phẩm (3 góc ảnh, bảng 11 màu chuẩn, ma trận tồn kho từng size, bảng thông số thành phẩm thực tế), lọc nhanh mã sắp hết hàng (`<= 3`), duyệt đơn theo 5 tab trạng thái và xem thống kê **AI Retail Analytics (`Try-to-Buy Conversion Rate`)**.
 
 ---
@@ -120,7 +120,7 @@ npm.cmd --prefix mobile run typecheck
 npm.cmd --prefix mobile run lint
 cd mobile; npx.cmd expo install --check
 
-# 2. Chạy bộ 60 kiểm thử tự động Backend (Auth, Kho, VIP/Voucher, VietQR, Sizing, Try-On 4 góc, Quyền riêng tư)
+# 2. Chạy bộ 62 kiểm thử tự động Backend (Auth, Kho, VIP/Voucher, SePay VietQR, Sizing, Try-On, Quyền riêng tư)
 cd backend; .\.venv\Scripts\python.exe -m pytest tests -q
 
 # 3. Chuẩn bị dữ liệu mẫu thực tế trên môi trường Demo (Idempotent)

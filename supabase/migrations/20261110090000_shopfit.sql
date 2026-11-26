@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL, customer_name TEXT NOT NULL,
     phone TEXT NOT NULL, address TEXT NOT NULL, note TEXT NOT NULL, total INTEGER NOT NULL,
     subtotal INTEGER, discount_amount INTEGER NOT NULL DEFAULT 0, voucher_code TEXT,
+    payment_method TEXT NOT NULL DEFAULT 'cod', payment_status TEXT NOT NULL DEFAULT 'unpaid',
+    payment_code TEXT, payment_qr_url TEXT, sepay_tx_id TEXT, paid_at TEXT,
     status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
     request_key TEXT, request_fingerprint TEXT
 );
@@ -94,7 +96,8 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
     id TEXT PRIMARY KEY, user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     package_id TEXT NOT NULL REFERENCES token_packages(id), amount INTEGER NOT NULL,
     tryons INTEGER NOT NULL, payment_code TEXT UNIQUE NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
-    qr_url TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, completed_at TEXT
+    qr_url TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, completed_at TEXT,
+    sepay_tx_id TEXT, reference_code TEXT, gateway TEXT, paid_amount INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_trans_user ON payment_transactions(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_trans_code ON payment_transactions(payment_code);
@@ -103,15 +106,32 @@ CREATE TABLE IF NOT EXISTS user_vouchers (
     discount_amount INTEGER NOT NULL, min_order INTEGER NOT NULL DEFAULT 0,
     used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sepay_webhooks (
+    sepay_id TEXT PRIMARY KEY, reference_code TEXT, gateway TEXT, account_number TEXT,
+    transfer_type TEXT NOT NULL, transfer_amount INTEGER NOT NULL DEFAULT 0,
+    content TEXT NOT NULL DEFAULT '', matched_kind TEXT NOT NULL DEFAULT 'ignored',
+    matched_id TEXT, created_at TEXT NOT NULL
+);
 
 -- Additive upgrades for existing live PostgreSQL schemas
 ALTER TABLE orders ALTER COLUMN user_id DROP NOT NULL;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS subtotal INTEGER;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_amount INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS voucher_code TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'cod';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'unpaid';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_code TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_qr_url TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS sepay_tx_id TEXT;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at TEXT;
 ALTER TABLE payment_transactions ALTER COLUMN user_id DROP NOT NULL;
+ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS sepay_tx_id TEXT;
+ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS reference_code TEXT;
+ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS gateway TEXT;
+ALTER TABLE payment_transactions ADD COLUMN IF NOT EXISTS paid_amount INTEGER;
 ALTER TABLE tryons ADD COLUMN IF NOT EXISTS quota_source TEXT NOT NULL DEFAULT 'daily';
 ALTER TABLE fit_reviews ADD COLUMN IF NOT EXISTS share_public INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_payment_code ON orders(payment_code) WHERE payment_code IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_tryons_product ON tryons(product_id, status);
 
@@ -134,8 +154,9 @@ ALTER TABLE reports ENABLE ROW LEVEL SECURITY;
 ALTER TABLE token_packages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_vouchers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sepay_webhooks ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON users, sessions, products, variants, orders, order_items, tryons,
     body_profiles, photo_checks, tryon_evaluations, wardrobe, password_resets, fit_reviews, ai_calls, retry_requests, reports,
-    token_packages, payment_transactions, user_vouchers
+    token_packages, payment_transactions, user_vouchers, sepay_webhooks
     FROM anon, authenticated;
 REVOKE ALL ON SEQUENCE order_items_id_seq FROM anon, authenticated;

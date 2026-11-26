@@ -5,8 +5,9 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { mediaUrl, request } from '../api';
+import { OrderQrModal } from '../components/order-qr-modal';
 import { Button, Empty, ErrorMessage, Field, Header, IconButton, Screen, s } from '../components/ui';
-import { tapSuccess } from '../haptics';
+import { tapLight, tapSuccess } from '../haptics';
 import { finishRequestKey, pendingRequestKey } from '../request-key';
 import { useStore } from '../store';
 import { money, theme as t } from '../theme';
@@ -21,6 +22,8 @@ export default function Cart() {
   const [note, setNote] = useState('');
   const [vouchers, setVouchers] = useState<UserVoucher[]>([]);
   const [voucherCode, setVoucherCode] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'cod' | 'vietqr'>('cod');
+  const [qrOrder, setQrOrder] = useState<Order | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
@@ -114,17 +117,23 @@ export default function Cart() {
         address: address.trim(),
         note: note.trim(),
         voucher_code: normalizedCode || null,
+        payment_method: paymentMethod,
         items: enrichedCart.map(i => ({ product_id: i.product.id, size: i.size, color: i.color, quantity: i.quantity })),
       });
       const scope = `checkout:${user.id}`;
       const key = await pendingRequestKey(scope, body);
-      await request<Order>('/api/orders', { method: 'POST', body, headers: { 'X-Idempotency-Key': key } });
+      const createdOrder = await request<Order>('/api/orders', { method: 'POST', body, headers: { 'X-Idempotency-Key': key } });
       await finishRequestKey(scope);
       tapSuccess();
       clearCart();
       void refresh();
-      notify('Đặt hàng thành công. Shop sẽ sớm xác nhận đơn của bạn.');
-      router.replace('/orders');
+      if (createdOrder.payment_method === 'vietqr' && createdOrder.payment_status !== 'paid' && createdOrder.payment_qr_url) {
+        notify('Đã tạo đơn hàng! Quét mã VietQR để hệ thống SePay tự động xác nhận.');
+        setQrOrder(createdOrder);
+      } else {
+        notify('Đặt hàng thành công. Shop sẽ sớm xác nhận đơn của bạn.');
+        router.replace('/orders');
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -349,17 +358,94 @@ export default function Cart() {
               <Text style={{ fontFamily: t.fonts.bold, color: t.colors.ink }}>Tổng thanh toán</Text>
               <Text style={{ fontFamily: t.fonts.bold, fontSize: 21, color: t.colors.green }}>{money(finalTotal)}</Text>
             </View>
-            <View style={[s.row, { backgroundColor: t.colors.greenLight, padding: 12, borderRadius: 8, marginBottom: 18, gap: 9 }]}>
-              <Ionicons name="cash-outline" size={19} color={t.colors.green} />
-              <Text style={[s.muted, { fontSize: 11, flex: 1 }]}>Thanh toán khi nhận hàng (COD)</Text>
+            <View style={{ marginBottom: 18, gap: 10 }}>
+              <Text style={[s.label, { marginBottom: 0 }]}>Phương thức thanh toán</Text>
+              {(
+                [
+                  {
+                    id: 'cod' as const,
+                    icon: 'cash-outline' as const,
+                    title: 'Thanh toán khi nhận hàng (COD)',
+                    subtitle: 'Kiểm tra trang phục rồi thanh toán tiền mặt cho shipper',
+                    badge: null,
+                  },
+                  {
+                    id: 'vietqr' as const,
+                    icon: 'qr-code-outline' as const,
+                    title: 'Chuyển khoản VietQR (SePay)',
+                    subtitle: 'Quét mã QR ngân hàng · Xác nhận thanh toán tự động 24/7',
+                    badge: 'Tự động',
+                  },
+                ]
+              ).map(opt => {
+                const selected = paymentMethod === opt.id;
+                return (
+                  <Pressable
+                    key={opt.id}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    onPress={() => {
+                      tapLight();
+                      setPaymentMethod(opt.id);
+                    }}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 11,
+                      padding: 13,
+                      borderRadius: 11,
+                      borderWidth: 1.5,
+                      borderColor: selected ? t.colors.green : t.colors.line,
+                      backgroundColor: selected ? t.colors.greenLight : t.colors.paper,
+                    }}
+                  >
+                    <Ionicons
+                      name={selected ? 'radio-button-on' : 'radio-button-off'}
+                      size={20}
+                      color={selected ? t.colors.green : t.colors.muted}
+                    />
+                    <Ionicons name={opt.icon} size={20} color={selected ? t.colors.green : t.colors.muted} />
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <Text style={{ fontFamily: selected ? t.fonts.bold : t.fonts.medium, fontSize: 13, color: t.colors.ink }}>
+                          {opt.title}
+                        </Text>
+                        {opt.badge ? (
+                          <View style={{ backgroundColor: t.colors.green, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 }}>
+                            <Text style={{ fontSize: 9, fontFamily: t.fonts.bold, color: '#FFFFFF' }}>{opt.badge}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <Text style={[s.muted, { fontSize: 11, marginTop: 2, lineHeight: 16 }]}>{opt.subtitle}</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
             </View>
             <ErrorMessage message={error} />
-            <Button loading={busy} disabled={hasUnavailable} icon="arrow-forward" onPress={() => void checkout()}>
-              {user ? 'Đặt hàng' : 'Đăng nhập để đặt hàng'}
+            <Button
+              loading={busy}
+              disabled={hasUnavailable}
+              icon={paymentMethod === 'vietqr' ? 'qr-code-outline' : 'arrow-forward'}
+              onPress={() => void checkout()}
+            >
+              {!user ? 'Đăng nhập để đặt hàng' : paymentMethod === 'vietqr' ? 'Đặt hàng & Thanh toán VietQR' : 'Đặt hàng'}
             </Button>
           </View>
         </View>
       )}
+      <OrderQrModal
+        order={qrOrder}
+        visible={Boolean(qrOrder)}
+        onClose={() => {
+          setQrOrder(null);
+          router.replace('/orders');
+        }}
+        onPaid={() => {
+          notify('Thanh toán VietQR thành công! Đơn hàng đã được tự động xác nhận.');
+          void refresh();
+        }}
+      />
     </Screen>
   );
 }

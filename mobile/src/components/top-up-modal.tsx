@@ -4,6 +4,7 @@ import { Image } from 'expo-image';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { request } from '../api';
+import { tapSuccess } from '../haptics';
 import { useStore } from '../store';
 import { money, theme as t } from '../theme';
 import type { PaymentOrder, PaymentStatus, TokenPackage } from '../types';
@@ -52,6 +53,7 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
         const res = await request<PaymentStatus>(`/api/payment/status/${order.transaction_id}`);
         if (res.status === 'completed') {
           if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+          tapSuccess();
           setCompletedTryons(res.tryons);
           setStep('success');
           void refreshQuota();
@@ -176,7 +178,7 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
                         <View style={{ flex: 1, paddingRight: 8 }}>
                           <Text style={{ fontSize: 15, fontFamily: t.fonts.bold, color: t.colors.ink }}>{pkg.name}</Text>
                           <Text style={{ fontSize: 13, color: t.colors.green, fontFamily: t.fonts.medium, marginTop: 2 }}>
-                            +{pkg.tryons} lượt thử 4 góc AI
+                            +{pkg.tryons} lượt thử đồ AI
                           </Text>
                           {pkg.voucher_value > 0 && (
                             <Text style={{ fontSize: 11, color: t.colors.gold, fontFamily: t.fonts.medium, marginTop: 4 }}>
@@ -276,8 +278,8 @@ export function TopUpModal({ visible, onClose }: { visible: boolean; onClose: ()
                 <ActivityIndicator size="small" color={reportedPaid ? '#B45309' : t.colors.green} />
                 <Text style={{ fontSize: 12, color: reportedPaid ? '#92400E' : t.colors.ink, flex: 1, fontFamily: t.fonts.medium }}>
                   {reportedPaid
-                    ? 'Đã báo chuyển khoản! Đang chờ hệ thống / Chủ shop duyệt và tự động cộng lượt...'
-                    : 'Đang chờ nhận chuyển khoản tự động qua VietQR...'}
+                    ? 'Đã báo chuyển khoản! Đang chờ SePay / Chủ shop duyệt và tự động cộng lượt...'
+                    : 'Đang tự động chờ tiền về qua SePay VietQR (kiểm tra mỗi 3 giây)...'}
                 </Text>
               </View>
 

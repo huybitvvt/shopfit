@@ -16,6 +16,8 @@ def test_payment_confirm_requires_admin_and_webhook_verifies_secret_and_amount(t
         order = api.post("/api/payment/create-order", headers=customer, json={"package_id": "pack_30"}).json()
         tid = order["transaction_id"]
         code = order["payment_code"]
+        assert order["qr_url"].startswith("https://qr.sepay.vn/img?")
+        assert code in order["qr_url"]
 
         # Customer clicking "I have paid" only transitions to 'verifying', never grants free credits
         res = api.post(f"/api/payment/confirm/{tid}", headers=customer)
@@ -28,13 +30,13 @@ def test_payment_confirm_requires_admin_and_webhook_verifies_secret_and_amount(t
         assert api.post("/api/payment/webhook", json={"content": code, "transferAmount": 49000}).status_code == 401
         assert api.post("/api/payment/webhook", headers={"X-Webhook-Secret": "wrong"}, json={"content": code, "transferAmount": 49000}).status_code == 401
 
-        # Webhook with insufficient transfer amount is ignored
+        # Webhook with insufficient transfer amount is ignored (still returns SePay success=True)
         underpaid = api.post(
             "/api/payment/webhook",
             headers={"Authorization": "Apikey whsec_test_123"},
-            json={"content": code, "transferAmount": 1000},
+            json={"id": 1001, "transferType": "in", "content": code, "transferAmount": 1000},
         )
-        assert underpaid.status_code == 200 and underpaid.json()["status"] == "ignored"
+        assert underpaid.status_code == 200 and underpaid.json()["success"] is True and underpaid.json()["status"] == "ignored"
         assert api.get("/api/user/quota", headers=customer).json()["starter_tryons_left"] == 3
 
         # Admin sees verifying payment and can approve 1-touch (or valid webhook completes it)
@@ -44,6 +46,151 @@ def test_payment_confirm_requires_admin_and_webhook_verifies_secret_and_amount(t
         assert approved.status_code == 200 and approved.json()["status"] == "completed"
         assert api.get("/api/user/quota", headers=customer).json()["starter_tryons_left"] == 33
         assert len(api.get("/api/user/vouchers", headers=customer).json()) == 1
+
+
+def test_sepay_webhook_topup_idempotency_and_transfer_filters(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path,
+        seed_demo=True,
+        gemini_api_key="",
+        payment_webhook_secret="sepay_live_secret_999",
+        bank_id="VPBank",
+        bank_account="012344413",
+        bank_account_name="NGUYEN DOAN HUY",
+    )
+    app = create_app(settings, engine=TestEngine(), analyzer=TestAnalyzer())
+    with TestClient(app) as api:
+        customer = login(api)
+        admin = login(api, True)
+        order = api.post("/api/payment/create-order", headers=customer, json={"package_id": "pack_30"}).json()
+        code = order["payment_code"]
+        sepay_headers = {"Authorization": "Apikey sepay_live_secret_999"}
+
+        # Outgoing transfer must be ignored
+        out_res = api.post(
+            "/api/payment/webhook",
+            headers=sepay_headers,
+            json={"id": 2001, "gateway": "VPBank", "accountNumber": "012344413", "transferType": "out", "transferAmount": 49000, "content": code},
+        )
+        assert out_res.status_code == 200 and out_res.json()["success"] is True and out_res.json()["status"] == "ignored"
+
+        # Wrong bank account must be ignored
+        wrong_acc = api.post(
+            "/api/payment/webhook",
+            headers=sepay_headers,
+            json={"id": 2002, "gateway": "VPBank", "accountNumber": "999999999", "transferType": "in", "transferAmount": 49000, "content": code},
+        )
+        assert wrong_acc.status_code == 200 and wrong_acc.json()["success"] is True and wrong_acc.json()["status"] == "ignored"
+
+        # Valid SePay incoming transfer completes top-up automatically
+        payload = {
+            "id": 2003,
+            "gateway": "VPBank",
+            "transactionDate": "2026-11-26 21:00:00",
+            "accountNumber": "012344413",
+            "code": None,
+            "content": f"VPB.CT.{code}.CHUYEN KHOAN",
+            "transferType": "in",
+            "transferAmount": 49000,
+            "referenceCode": "FT2633000123",
+        }
+        ok = api.post("/api/payment/webhook", headers=sepay_headers, json=payload)
+        assert ok.status_code == 200
+        assert ok.json()["success"] is True and ok.json()["kind"] == "topup" and ok.json()["status"] == "completed"
+        assert api.get("/api/user/quota", headers=customer).json()["starter_tryons_left"] == 33
+        assert len(api.get("/api/user/vouchers", headers=customer).json()) == 1
+
+        # Duplicate SePay webhook with same id must NOT double-credit
+        dup = api.post("/api/payment/webhook", headers=sepay_headers, json=payload)
+        assert dup.status_code == 200 and dup.json()["success"] is True and dup.json()["status"] == "duplicate"
+        assert api.get("/api/user/quota", headers=customer).json()["starter_tryons_left"] == 33
+        assert len(api.get("/api/user/vouchers", headers=customer).json()) == 1
+
+        # Audit metadata stored on payment record
+        admin_rows = api.get("/api/admin/payments", headers=admin).json()
+        matched = next(p for p in admin_rows if p["id"] == order["transaction_id"])
+        assert matched["sepay_tx_id"] == "2003"
+        assert matched["reference_code"] == "FT2633000123"
+        assert matched["gateway"] == "VPBank"
+
+
+def test_vietqr_order_checkout_sepay_auto_confirm_and_admin_fallback(tmp_path):
+    settings = Settings(
+        data_dir=tmp_path,
+        seed_demo=True,
+        gemini_api_key="",
+        payment_webhook_secret="sepay_order_secret",
+        bank_id="VPBank",
+        bank_account="012344413",
+        bank_account_name="NGUYEN DOAN HUY",
+        tryon_angles=("front",),
+    )
+    app = create_app(settings, engine=TestEngine(), analyzer=TestAnalyzer())
+    with TestClient(app) as api:
+        health = api.get("/api/health").json()
+        assert health["tryon_angles"] == ["front"]
+
+        customer = login(api)
+        admin = login(api, True)
+
+        # 1. Create VietQR order
+        res = api.post("/api/orders", headers=customer, json={**checkout_body(1), "payment_method": "vietqr"})
+        assert res.status_code == 201
+        order = res.json()
+        oid = order["id"]
+        pcode = order["payment_code"]
+        assert order["payment_method"] == "vietqr"
+        assert order["payment_status"] == "unpaid"
+        assert order["status"] == "pending"
+        assert pcode and pcode.startswith("SF") and len(pcode) == 8
+        assert order["payment_qr_url"].startswith("https://qr.sepay.vn/img?")
+        assert order["bank_id"] == "VPBank" and order["bank_account"] == "012344413"
+
+        # Customer report-paid transitions to verifying, NEVER paid
+        rep = api.post(f"/api/orders/{oid}/report-paid", headers=customer)
+        assert rep.status_code == 200 and rep.json()["payment_status"] == "verifying" and rep.json()["status"] == "pending"
+
+        # Underpaid SePay transfer is ignored
+        sepay_headers = {"Authorization": "Apikey sepay_order_secret"}
+        under = api.post(
+            "/api/payment/webhook",
+            headers=sepay_headers,
+            json={"id": 3001, "accountNumber": "012344413", "transferType": "in", "transferAmount": 10000, "content": pcode},
+        )
+        assert under.status_code == 200 and under.json()["success"] is True and under.json()["status"] == "ignored"
+        assert api.get(f"/api/orders/{oid}", headers=customer).json()["payment_status"] == "verifying"
+
+        # Full-amount SePay transfer marks order paid AND auto-confirms order!
+        paid = api.post(
+            "/api/payment/webhook",
+            headers=sepay_headers,
+            json={"id": 3002, "gateway": "VPBank", "accountNumber": "012344413", "transferType": "in", "transferAmount": 459000, "content": f"KH THANH TOAN {pcode}"},
+        )
+        assert paid.status_code == 200
+        assert paid.json()["success"] is True and paid.json()["kind"] == "order" and paid.json()["status"] == "paid" and paid.json()["order_id"] == oid
+
+        latest = api.get(f"/api/orders/{oid}", headers=customer).json()
+        assert latest["payment_status"] == "paid"
+        assert latest["status"] == "confirmed"
+        assert latest["sepay_tx_id"] == "3002"
+        assert latest["paid_at"] is not None
+
+        # Paid order cannot be self-cancelled by customer
+        assert api.patch(f"/api/orders/{oid}", headers=customer, json={"status": "cancelled"}).status_code == 409
+
+        # Duplicate SePay webhook returns duplicate safely
+        dup = api.post(
+            "/api/payment/webhook",
+            headers=sepay_headers,
+            json={"id": 3002, "gateway": "VPBank", "accountNumber": "012344413", "transferType": "in", "transferAmount": 459000, "content": f"KH THANH TOAN {pcode}"},
+        )
+        assert dup.status_code == 200 and dup.json()["success"] is True and dup.json()["status"] == "duplicate"
+
+        # 2. Admin manual fallback confirm-payment on another VietQR order
+        order2 = api.post("/api/orders", headers=customer, json={**checkout_body(1), "payment_method": "vietqr"}).json()
+        confirmed2 = api.post(f"/api/admin/orders/{order2['id']}/confirm-payment", headers=admin)
+        assert confirmed2.status_code == 200
+        assert confirmed2.json()["payment_status"] == "paid" and confirmed2.json()["status"] == "confirmed"
 
 
 def test_account_deletion_succeeds_with_orders_payments_and_vouchers(client):

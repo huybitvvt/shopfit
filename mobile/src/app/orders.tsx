@@ -4,6 +4,7 @@ import { router, useFocusEffect } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { mediaUrl, request } from '../api';
+import { OrderQrModal } from '../components/order-qr-modal';
 import { Button, Empty, ErrorMessage, Header, Screen, s } from '../components/ui';
 import { useStore } from '../store';
 import { dateLabel, money, normalizeVi, theme as t } from '../theme';
@@ -29,6 +30,7 @@ export default function Orders() {
   const [activeTab, setActiveTab] = useState<OrderTab>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
+  const [activeQrOrder, setActiveQrOrder] = useState<Order | null>(null);
 
   const fetchOrders = useCallback(async () => {
     if (!user) {
@@ -66,6 +68,21 @@ export default function Orders() {
       setOrders(list => list.map(i => (i.id === next.id ? next : i)));
       void refresh();
       notify(`Đã cập nhật đơn hàng SF · ${order.id.slice(0, 8).toUpperCase()}.`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function confirmOrderPayment(order: Order) {
+    setBusy(order.id);
+    setError(null);
+    try {
+      const next = await request<Order>(`/api/admin/orders/${order.id}/confirm-payment`, { method: 'POST' });
+      setOrders(list => list.map(i => (i.id === next.id ? next : i)));
+      void refresh();
+      notify(`Đã xác nhận thanh toán VietQR cho đơn SF · ${order.id.slice(0, 8).toUpperCase()}.`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -418,10 +435,80 @@ export default function Orders() {
                   ) : null}
                 </View>
 
-                {/* Total amount */}
-                <View style={[s.between, { marginTop: 14, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F0ECE4' }]}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[s.muted, { fontSize: 12 }]}>Phương thức: COD (Thanh toán khi nhận hàng)</Text>
+                {/* Total amount & Payment Method */}
+                <View style={[s.between, { marginTop: 14, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#F0ECE4', alignItems: 'flex-start' }]}>
+                  <View style={{ flex: 1, gap: 4 }}>
+                    <Text style={[s.muted, { fontSize: 12 }]}>
+                      {order.payment_method === 'vietqr'
+                        ? 'Phương thức: Chuyển khoản VietQR (SePay)'
+                        : 'Phương thức: COD (Thanh toán khi nhận hàng)'}
+                    </Text>
+                    {order.payment_method === 'vietqr' && (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 2 }}>
+                        <View
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 4,
+                            paddingHorizontal: 8,
+                            paddingVertical: 3,
+                            borderRadius: 5,
+                            backgroundColor:
+                              order.payment_status === 'paid'
+                                ? '#D1FAE5'
+                                : order.payment_status === 'verifying'
+                                ? '#FEF3C7'
+                                : '#FFEDD5',
+                          }}
+                        >
+                          <Ionicons
+                            name={
+                              order.payment_status === 'paid'
+                                ? 'checkmark-circle'
+                                : order.payment_status === 'verifying'
+                                ? 'time-outline'
+                                : 'qr-code-outline'
+                            }
+                            size={12}
+                            color={
+                              order.payment_status === 'paid'
+                                ? '#047857'
+                                : order.payment_status === 'verifying'
+                                ? '#B45309'
+                                : '#C2410C'
+                            }
+                          />
+                          <Text
+                            style={{
+                              fontSize: 10,
+                              fontFamily: t.fonts.bold,
+                              color:
+                                order.payment_status === 'paid'
+                                  ? '#047857'
+                                  : order.payment_status === 'verifying'
+                                  ? '#B45309'
+                                  : '#C2410C',
+                            }}
+                          >
+                            {order.payment_status === 'paid'
+                              ? 'Đã thanh toán VietQR'
+                              : order.payment_status === 'verifying'
+                              ? 'Chờ đối soát chuyển khoản'
+                              : 'Chờ thanh toán VietQR'}
+                          </Text>
+                        </View>
+                        {order.payment_code ? (
+                          <Text style={{ fontSize: 10, fontFamily: t.fonts.bold, color: t.colors.muted }}>
+                            Mã CK: {order.payment_code}
+                          </Text>
+                        ) : null}
+                        {order.sepay_tx_id ? (
+                          <Text style={{ fontSize: 10, color: '#047857', fontFamily: t.fonts.medium }}>
+                            SePay #{order.sepay_tx_id}
+                          </Text>
+                        ) : null}
+                      </View>
+                    )}
                     {(order.discount_amount ?? 0) > 0 && (
                       <Text style={{ fontSize: 11, color: '#8A642C', fontFamily: t.fonts.medium, marginTop: 2 }}>
                         Đã giảm ưu đãi: -{money(order.discount_amount || 0)}
@@ -438,6 +525,17 @@ export default function Orders() {
                 {/* 1-TOUCH ADMIN ACTIONS */}
                 {user.role === 'admin' && (
                   <View style={{ marginTop: 14, gap: 8 }}>
+                    {order.payment_method === 'vietqr' && order.payment_status !== 'paid' && order.status !== 'cancelled' && (
+                      <Button
+                        variant="secondary"
+                        icon="qr-code-outline"
+                        loading={isBusy}
+                        disabled={busy !== null}
+                        onPress={() => void confirmOrderPayment(order)}
+                      >
+                        ✓ Xác nhận đã nhận CK VietQR (Duyệt thủ công)
+                      </Button>
+                    )}
                     {order.status === 'pending' && (
                       <View style={{ flexDirection: 'row', gap: 8 }}>
                         <Button
@@ -506,8 +604,23 @@ export default function Orders() {
                   </View>
                 )}
 
-                {/* Customer Cancel & Reorder actions */}
-                {user.role !== 'admin' && order.status === 'pending' && confirmCancelId !== order.id && (
+                {/* Customer VietQR Pay Now, Cancel & Reorder actions */}
+                {user.role !== 'admin' &&
+                  order.payment_method === 'vietqr' &&
+                  order.payment_status !== 'paid' &&
+                  order.status !== 'cancelled' &&
+                  order.payment_qr_url && (
+                    <Button
+                      icon="qr-code-outline"
+                      disabled={busy !== null}
+                      onPress={() => setActiveQrOrder(order)}
+                      style={{ marginTop: 12 }}
+                    >
+                      {order.payment_status === 'verifying' ? 'Xem lại mã VietQR thanh toán' : 'Quét mã VietQR thanh toán ngay'}
+                    </Button>
+                  )}
+
+                {user.role !== 'admin' && order.status === 'pending' && order.payment_status !== 'paid' && confirmCancelId !== order.id && (
                   <Button
                     variant="outline"
                     disabled={busy !== null}
@@ -558,6 +671,21 @@ export default function Orders() {
           })
         )}
       </View>
+      <OrderQrModal
+        order={activeQrOrder}
+        visible={Boolean(activeQrOrder)}
+        dismissLabel="Đóng"
+        doneLabel="Quay lại đơn hàng"
+        onClose={() => setActiveQrOrder(null)}
+        onUpdated={updated => {
+          setOrders(list => list.map(i => (i.id === updated.id ? updated : i)));
+        }}
+        onPaid={updated => {
+          setOrders(list => list.map(i => (i.id === updated.id ? updated : i)));
+          notify('Thanh toán VietQR thành công! Đơn hàng đã được tự động xác nhận.');
+          void refresh();
+        }}
+      />
     </Screen>
   );
 }

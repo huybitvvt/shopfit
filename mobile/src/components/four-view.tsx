@@ -260,7 +260,7 @@ export function FourView({ job }: { job: TryOn }) {
               </View>
 
               <Text style={[s.muted, { fontSize: 13, lineHeight: 19 }]}>
-                Apple & ShopFit cam kết loại bỏ nội dung không phù hợp. Vui lòng chọn lý do khiếu nại:
+                ShopFit cam kết loại bỏ nội dung không phù hợp. Vui lòng chọn lý do khiếu nại:
               </Text>
 
               <View style={{ gap: 8 }}>

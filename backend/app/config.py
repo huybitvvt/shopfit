@@ -32,7 +32,7 @@ class Settings:
     image_estimate_usd: float = field(default_factory=lambda: float(os.getenv("AI_IMAGE_ESTIMATE_USD", "0.10")))
     vision_estimate_usd: float = field(default_factory=lambda: float(os.getenv("AI_VISION_ESTIMATE_USD", "0.002")))
     cors_origins: list[str] = field(default_factory=lambda: [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:8081,http://localhost:8082").split(",") if x.strip()])
-    payment_webhook_secret: str = field(default_factory=lambda: os.getenv("PAYMENT_WEBHOOK_SECRET", "").strip())
+    payment_webhook_secret: str = field(default_factory=lambda: (os.getenv("PAYMENT_WEBHOOK_SECRET") or os.getenv("SEPAY_API_KEY", "")).strip())
     otp_secret: str = field(default_factory=lambda: os.getenv("OTP_SECRET", "shopfit-otp-hmac-v1").strip())
     cloudfly_endpoint_url: str = field(default_factory=lambda: os.getenv("CLOUDFLY_ENDPOINT_URL", "").strip())
     cloudfly_access_key: str = field(default_factory=lambda: os.getenv("CLOUDFLY_ACCESS_KEY", "").strip())
@@ -48,9 +48,10 @@ class Settings:
     smtp_use_tls: bool = field(default_factory=lambda: os.getenv("SMTP_USE_TLS", "true").lower() == "true")
     resend_api_key: str = field(default_factory=lambda: os.getenv("RESEND_API_KEY", "").strip())
     brevo_api_key: str = field(default_factory=lambda: os.getenv("BREVO_API_KEY", "").strip())
-    bank_id: str = field(default_factory=lambda: os.getenv("BANK_ID", "MB").strip())
+    bank_id: str = field(default_factory=lambda: os.getenv("BANK_ID", "VPBank").strip())
     bank_account: str = field(default_factory=lambda: os.getenv("BANK_ACCOUNT", "888899998888").strip())
     bank_account_name: str = field(default_factory=lambda: os.getenv("BANK_ACCOUNT_NAME", "SHOPFIT STUDIO").strip())
+    sepay_qr_template: str = field(default_factory=lambda: os.getenv("SEPAY_QR_TEMPLATE", "compact").strip() or "compact")
 
     def __post_init__(self):
         if self.image_size not in {"512", "1K"}:
